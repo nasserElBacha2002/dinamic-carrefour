@@ -1,0 +1,54 @@
+# Entorno virtual
+venv/
+env/
+ENV/
+
+# Archivos Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Outputs del sistema
+output/
+*.json
+!requirements.txt
+
+# Frames extraídos (pueden ser grandes)
+frames_extraidos/
+frames_analysis/
+
+# Datos de entrada
+data/
+*.MOV
+*.mp4
+*.avi
+*.mkv
+
+# Videos procesados
+*.MOV
+*.mp4
+*.avi
+*.mkv
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Modelos entrenados (pueden ser grandes)
+# Excluir archivos de modelo pero permitir documentación
+*.pt
+*.pth
+*.onnx
+# modelos/  # Comentado para permitir README.md y estructura
+
+# Logs
+*.log
+

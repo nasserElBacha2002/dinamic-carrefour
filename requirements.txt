@@ -1,0 +1,26 @@
+# Dependencias para Sistema de Inventario de Góndolas MVP
+
+# Visión artificial y procesamiento de imágenes
+opencv-python>=4.8.0
+ultralytics>=8.0.0  # YOLOv8
+
+# OCR para reconocimiento de marcas
+easyocr>=1.7.0  # OCR más fácil de usar
+pytesseract>=0.3.10  # Alternativa (requiere Tesseract instalado)
+
+# Utilidades estándar (generalmente ya incluidas en Python)
+# pathlib - incluido en Python 3.4+
+# json - incluido en Python estándar
+# csv - incluido en Python estándar
+# datetime - incluido en Python estándar
+
+# Opcional: Para mejor manejo de imágenes
+# Pillow>=10.0.0  # Alternativa a OpenCV para algunas operaciones
+
+# Opcional: Para análisis de datos (futuro)
+# pandas>=2.0.0
+# numpy>=1.24.0
+
+# Opcional: Integración con Roboflow (para gestión de datasets)
+# roboflow>=1.1.0  # Descomentar si quieres usar Roboflow API
+
