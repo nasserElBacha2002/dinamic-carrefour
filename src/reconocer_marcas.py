@@ -2,6 +2,10 @@
 """
 Módulo para reconocimiento de marcas usando OCR
 Identifica marcas automáticamente leyendo texto de las etiquetas de productos
+
+MEJORADO: Implementa Dependency Inversion Principle (DIP)
+- Acepta estrategia OCR inyectada
+- Desacoplado de implementaciones concretas de OCR
 """
 
 import cv2
@@ -9,51 +13,36 @@ import re
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 
-try:
-    import pytesseract
-    TESSERACT_AVAILABLE = True
-except ImportError:
-    TESSERACT_AVAILABLE = False
-    print("⚠️  pytesseract no está instalado. Instalar con: pip install pytesseract")
-    print("   También necesitas instalar Tesseract OCR: brew install tesseract (macOS)")
-
-try:
-    import easyocr
-    EASYOCR_AVAILABLE = True
-except ImportError:
-    EASYOCR_AVAILABLE = False
+# Importar estrategias OCR y protocolo
+from src.ocr_strategies import OCRStrategyBase, crear_ocr_strategy
 
 
 class ReconocedorMarcas:
     """
     Clase para reconocer marcas de productos usando OCR
+    
+    SOLID Improvements:
+    - Dependency Inversion: Depende de OCRStrategyBase (abstracción)
+    - Open/Closed: Extensible con nuevas estrategias OCR sin modificar esta clase
     """
     
-    def __init__(self, metodo='tesseract'):
+    def __init__(self, ocr_strategy: Optional[OCRStrategyBase] = None):
         """
-        Inicializa el reconocedor de marcas
+        Inicializa el reconocedor de marcas con inyección de dependencia
         
         Args:
-            metodo: 'tesseract' o 'easyocr'
+            ocr_strategy: Estrategia de OCR a usar (si None, usa default)
         """
-        self.metodo = metodo
-        self.reader = None
-        
-        if metodo == 'easyocr' and EASYOCR_AVAILABLE:
-            print("🔄 Inicializando EasyOCR...")
-            self.reader = easyocr.Reader(['es', 'en'], gpu=False)
-            print("✅ EasyOCR listo")
-        elif metodo == 'tesseract' and not TESSERACT_AVAILABLE:
-            print("⚠️  Tesseract no disponible, intentando EasyOCR...")
-            if EASYOCR_AVAILABLE:
-                self.metodo = 'easyocr'
-                self.reader = easyocr.Reader(['es', 'en'], gpu=False)
-            else:
-                print("❌ Error: No hay OCR disponible. Instala pytesseract o easyocr")
+        if ocr_strategy is None:
+            # Fallback: crear estrategia por defecto
+            self.ocr_strategy = crear_ocr_strategy('easyocr')
+        else:
+            self.ocr_strategy = ocr_strategy
     
     def extraer_texto_region(self, imagen, bbox):
         """
         Extrae texto de una región específica de la imagen
+        Delega a la estrategia OCR inyectada
         
         Args:
             imagen: Imagen completa (numpy array)
@@ -62,47 +51,13 @@ class ReconocedorMarcas:
         Returns:
             Texto extraído
         """
-        x1, y1, x2, y2 = [int(coord) for coord in bbox]
-        
-        # Asegurar que las coordenadas están dentro de la imagen
-        h, w = imagen.shape[:2]
-        x1 = max(0, min(x1, w))
-        y1 = max(0, min(y1, h))
-        x2 = max(0, min(x2, w))
-        y2 = max(0, min(y2, h))
-        
-        # Extraer región
-        region = imagen[y1:y2, x1:x2]
-        
-        if region.size == 0:
-            return ""
-        
-        # Preprocesar imagen para mejor OCR
-        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY) if len(region.shape) == 3 else region
-        
-        # Mejorar contraste
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        gray = clahe.apply(gray)
-        
-        # Redimensionar si es muy pequeño
-        if gray.shape[0] < 50 or gray.shape[1] < 50:
-            scale = max(50 / gray.shape[0], 50 / gray.shape[1])
-            gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-        
-        # Extraer texto
-        if self.metodo == 'tesseract' and TESSERACT_AVAILABLE:
-            texto = pytesseract.image_to_string(gray, lang='spa+eng')
-        elif self.metodo == 'easyocr' and self.reader:
-            resultados = self.reader.readtext(gray)
-            texto = ' '.join([result[1] for result in resultados])
-        else:
-            return ""
-        
-        return texto.strip()
+        # Delegar a estrategia OCR (Dependency Inversion)
+        return self.ocr_strategy.extraer_texto(imagen, bbox)
     
     def extraer_texto_con_confianza(self, imagen, bbox) -> List[Tuple[str, float]]:
         """
-        Extrae texto con niveles de confianza usando EasyOCR
+        Extrae texto con niveles de confianza
+        Delega a la estrategia OCR inyectada
         
         Args:
             imagen: Imagen completa
@@ -111,35 +66,8 @@ class ReconocedorMarcas:
         Returns:
             Lista de tuplas (texto, confianza)
         """
-        x1, y1, x2, y2 = [int(coord) for coord in bbox]
-        h, w = imagen.shape[:2]
-        x1 = max(0, min(x1, w))
-        y1 = max(0, min(y1, h))
-        x2 = max(0, min(x2, w))
-        y2 = max(0, min(y2, h))
-        
-        region = imagen[y1:y2, x1:x2]
-        if region.size == 0:
-            return []
-        
-        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY) if len(region.shape) == 3 else region
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        gray = clahe.apply(gray)
-        
-        if gray.shape[0] < 50 or gray.shape[1] < 50:
-            scale = max(50 / gray.shape[0], 50 / gray.shape[1])
-            gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-        
-        textos = []
-        if self.metodo == 'easyocr' and self.reader:
-            resultados = self.reader.readtext(gray)
-            textos = [(result[1], result[2]) for result in resultados]
-        elif self.metodo == 'tesseract' and TESSERACT_AVAILABLE:
-            texto = pytesseract.image_to_string(gray, lang='spa+eng')
-            if texto.strip():
-                textos = [(texto.strip(), 0.8)]  # Confianza estimada para Tesseract
-        
-        return textos
+        # Delegar a estrategia OCR (Dependency Inversion)
+        return self.ocr_strategy.extraer_texto_con_confianza(imagen, bbox)
     
     def _similitud_palabras(self, palabra1: str, palabra2: str) -> float:
         """
@@ -223,7 +151,7 @@ class ReconocedorMarcas:
         # Números y códigos comunes
         patrones_ignorar = [
             r'^\d+$',  # Solo números
-            r'^\d+[ml|lt|kg|g]$',  # Cantidades
+            r'^\d+(ml|lt|kg|g)$',  # Cantidades (corregido: grupo, no char class)
             r'^[A-Z]{2,}\d+$',  # Códigos como "SKU123"
         ]
         

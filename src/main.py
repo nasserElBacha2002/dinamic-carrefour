@@ -2,6 +2,11 @@
 """
 Sistema Principal - Inventario de Góndolas MVP
 Pipeline completo: Análisis → Frames → Detección → Reporte
+
+MEJORADO: Implementa Dependency Inversion Principle (DIP)
+- Usa ComponentFactory para crear dependencias
+- Acepta detector inyectado
+- Desacoplado de implementaciones concretas
 """
 
 import os
@@ -13,34 +18,53 @@ from datetime import datetime
 
 # Importar módulos del proyecto
 from src.analizar_video import analizar_video, exportar_frames
-from src.detectar_productos import DetectorProductos
+
+# Importar factory para crear componentes (Dependency Inversion)
+from src.factory import ComponentFactory
+
+# Importar protocolos (abstracciones)
+try:
+    from src.protocols import DetectorProtocol, IdentificadorSKUProtocol
+except ImportError:
+    # Backward compatibility
+    DetectorProtocol = None
+    IdentificadorSKUProtocol = None
 
 
 class SistemaInventarioGondola:
     """
     Sistema principal para procesamiento completo de videos de góndolas
     Pipeline: Análisis → Extracción → Detección → Reporte
+    
+    SOLID Improvements:
+    - Dependency Inversion: Acepta detector e identificador inyectados
+    - Open/Closed: Extensible sin modificar código existente
     """
     
-    def __init__(self, modelo_path=None, confianza_minima=None, reconocer_marcas=True):
+    def __init__(
+        self,
+        detector: object = None,  # DetectorProtocol
+        identificador_sku: object = None,  # IdentificadorSKUProtocol
+        sku_threshold: float = 0.5
+    ):
         """
-        Inicializa el sistema
+        Inicializa el sistema con inyección de dependencias
         
         Args:
-            modelo_path: Ruta al modelo YOLOv8 (None = usa modelo por defecto)
-            confianza_minima: Confianza mínima para detecciones (None = usa default)
-            reconocer_marcas: Si True, intenta reconocer marcas usando OCR
+            detector: Instancia de detector (inyección)
+            identificador_sku: Instancia de identificador SKU (inyección)
+            sku_threshold: Umbral de similitud para SKU
         """
-        self.detector = None
-        self.modelo_path = modelo_path
-        self.confianza_minima = confianza_minima
-        self.reconocer_marcas = reconocer_marcas
+        self.detector = detector
+        self.identificador_sku = identificador_sku
+        self.sku_threshold = sku_threshold
     
     def procesar_video(self, video_path, output_base_dir="output", 
                        fps_extraccion=1.0, rotar_frames=False,
-                       detectar=True, generar_anotaciones=True):
+                       detectar=True, generar_anotaciones=True,
+                       guardar_crops=False):
         """
-        Procesa un video completo: análisis → extracción → detección → reporte
+        Procesa un video completo: análisis → extracción → detección → identificación SKU → reporte
         
         Args:
             video_path: Ruta al archivo de video
@@ -49,6 +73,7 @@ class SistemaInventarioGondola:
             rotar_frames: Si True, rota los frames
             detectar: Si True, ejecuta detección de productos
             generar_anotaciones: Si True, genera imágenes anotadas
+            guardar_crops: Si True, guarda crops de cada detección
         
         Returns:
             Diccionario con resultados del procesamiento
@@ -58,12 +83,17 @@ class SistemaInventarioGondola:
         print("=" * 70)
         print(f"📅 Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"📹 Video: {video_path}")
+        if self.identificar_sku:
+            print("🔍 Identificación SKU: ACTIVADA")
         print("=" * 70)
         
         # Verificar que el video existe
         if not os.path.exists(video_path):
             print(f"❌ Error: No se encuentra el video {video_path}")
             return None
+        
+        # Determinar si hay que guardar crops (antes de cualquier condicional)
+        debe_guardar_crops = guardar_crops or (self.identificador_sku is not None)
         
         # Crear estructura de directorios
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -72,9 +102,12 @@ class SistemaInventarioGondola:
         
         frames_dir = session_dir / "frames_extraidos"
         reporte_dir = session_dir / "reporte_deteccion"
+        crops_dir = session_dir / "crops"
         
         frames_dir.mkdir(parents=True, exist_ok=True)
         reporte_dir.mkdir(parents=True, exist_ok=True)
+        if debe_guardar_crops:
+            crops_dir.mkdir(parents=True, exist_ok=True)
         
         resultados = {
             'video_path': video_path,
@@ -130,16 +163,17 @@ class SistemaInventarioGondola:
             print("PASO 3: DETECCIÓN DE PRODUCTOS")
             print("─" * 70)
             
-            # Inicializar detector si no está inicializado
+            # Verificar que hay detector inyectado
             if self.detector is None:
-                self.detector = DetectorProductos(
-                    modelo_path=self.modelo_path,
-                    confianza_minima=self.confianza_minima,
-                    reconocer_marcas=self.reconocer_marcas
+                print("⚠️  No hay detector disponible. Omitiendo detección.")
+                detectar = False
+            else:
+                # Procesar frames (con crops si está habilitado)
+                resultados_deteccion = self.detector.procesar_frames(
+                    str(frames_dir),
+                    guardar_crops=debe_guardar_crops,
+                    crops_dir=str(crops_dir) if debe_guardar_crops else None
                 )
-            
-            # Procesar frames
-            resultados_deteccion = self.detector.procesar_frames(str(frames_dir))
             
             if not resultados_deteccion:
                 print("⚠️  No se detectaron productos o no hay frames para procesar")
@@ -149,6 +183,39 @@ class SistemaInventarioGondola:
                     'total_frames_procesados': len(resultados_deteccion),
                     'total_detecciones': sum(len(dets) for dets in resultados_deteccion.values())
                 }
+                
+                # PASO 3.5: Identificación SKU (si está habilitado)
+                if self.identificador_sku and debe_guardar_crops:
+                    print("\n" + "─" * 70)
+                    print("PASO 3.5: IDENTIFICACIÓN DE SKU")
+                    print("─" * 70)
+                    
+                    # Recolectar todos los crops
+                    todos_crops = []
+                    for frame_dets in resultados_deteccion.values():
+                        for det in frame_dets:
+                            if 'crop_path' in det:
+                                todos_crops.append(det)
+                    
+                    print(f"🔍 Identificando {len(todos_crops)} crops...")
+                    
+                    # Identificar SKUs
+                    sku_identificados = 0
+                    for det in todos_crops:
+                        resultado_sku = self.identificador_sku.identificar(
+                            det['crop_path'],
+                            threshold=self.sku_threshold
+                        )
+                        det['ean'] = resultado_sku['ean']
+                        det['confianza_sku'] = resultado_sku['confianza']
+                        det['top_matches_sku'] = resultado_sku['top_matches'][:3]
+                        
+                        if resultado_sku['ean'] != 'UNKNOWN':
+                            sku_identificados += 1
+                    
+                    print(f"✅ SKUs identificados: {sku_identificados}/{len(todos_crops)}")
+                    resultados['sku_identificados'] = sku_identificados
+                    resultados['crops_procesados'] = len(todos_crops)
                 
                 # Contar productos
                 conteo = self.detector.contar_productos(resultados_deteccion)
@@ -162,8 +229,14 @@ class SistemaInventarioGondola:
                 self.detector.generar_reporte_completo(
                     resultados_deteccion,
                     output_dir=str(reporte_dir),
-                    frames_dir=str(frames_dir)
+                    frames_dir=str(frames_dir),
+                    generar_anotaciones=generar_anotaciones
                 )
+                
+                # Guardar reporte SKU si se identificaron
+                if self.identificador_sku and todos_crops:
+                    reporte_sku_path = reporte_dir / "inventario_sku.csv"
+                    self._generar_reporte_sku(todos_crops, reporte_sku_path)
                 
                 resultados['reporte_dir'] = str(reporte_dir)
         
@@ -180,17 +253,47 @@ class SistemaInventarioGondola:
                 conteo = resultados['conteo_productos']
                 print(f"📦 SKUs detectados: {len(conteo)}")
                 print(f"📈 Total de productos: {sum(conteo.values())}")
+            if self.identificador_sku and resultados.get('sku_identificados'):
+                print(f"🏷️  EANs identificados: {resultados['sku_identificados']}/{resultados.get('crops_procesados', 0)}")
         
         print("\n📋 Archivos generados:")
         print(f"   - Análisis: {analisis_path.name}")
         print(f"   - Frames: {frames_dir.name}/")
+        if debe_guardar_crops:
+            print(f"   - Crops: {crops_dir.name}/")
         if detectar and resultados.get('reporte_dir'):
             print(f"   - Inventario CSV: reporte_deteccion/inventario.csv")
+            if self.identificador_sku:
+                print(f"   - Inventario SKU: reporte_deteccion/inventario_sku.csv")
             if generar_anotaciones:
                 print(f"   - Imágenes anotadas: reporte_deteccion/*_detectado.jpg")
         print("=" * 70)
         
         return resultados
+    
+    def _generar_reporte_sku(self, detecciones_con_sku, output_path):
+        """Genera CSV con inventario por EAN"""
+        import csv
+        
+        # Agrupar por EAN
+        conteo_ean = {}
+        for det in detecciones_con_sku:
+            ean = det.get('ean', 'UNKNOWN')
+            if ean not in conteo_ean:
+                conteo_ean[ean] = 0
+            conteo_ean[ean] += 1
+        
+        # Escribir CSV
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['EAN', 'Cantidad', 'Fecha'])
+            
+            fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            for ean, cantidad in sorted(conteo_ean.items()):
+                writer.writerow([ean, cantidad, fecha])
+        
+        print(f"💾 Reporte SKU guardado: {output_path.name}")
     
 
 
@@ -239,6 +342,20 @@ Ejemplos de uso:
                        help='No generar imágenes anotadas (más rápido)')
     parser.add_argument('--sin-marcas', action='store_true',
                        help='Desactivar reconocimiento de marcas (más rápido)')
+    parser.add_argument('--ocr-metodo', default='easyocr', choices=['easyocr', 'tesseract', 'dummy'],
+                       help='Método OCR para reconocimiento de marcas (default: easyocr)')
+    parser.add_argument('--export-formato', default='csv', choices=['csv', 'json', 'multi'],
+                       help='Formato de exportación de reportes (default: csv)')
+    
+    # Opciones de identificación SKU
+    parser.add_argument('--catalogo', default=None,
+                       help='Directorio con catálogo de imágenes para identificación SKU (EAN/imagen.jpg)')
+    parser.add_argument('--identificar-sku', action='store_true',
+                       help='Activar identificación de SKU/EAN usando retrieval visual')
+    parser.add_argument('--sku-threshold', type=float, default=0.5,
+                       help='Umbral de similitud para identificación SKU (0-1, default: 0.5)')
+    parser.add_argument('--guardar-crops', action='store_true',
+                       help='Guardar crops de cada detección (se activa automáticamente con --identificar-sku)')
     
     # Opciones de extracción de frames
     parser.add_argument('--fps', type=float, default=1.0,
@@ -257,11 +374,28 @@ Ejemplos de uso:
         print(f"❌ Error: No se encuentra el video {args.video}")
         sys.exit(1)
     
-    # Crear sistema
+    # Crear componentes usando Factory (Dependency Inversion Principle)
+    print("\n🔧 Configurando componentes del sistema...")
+    
+    # Configuración para factory
+    config = {
+        'modelo_path': args.modelo,
+        'confianza_minima': args.confianza,
+        'reconocer_marcas': not args.sin_marcas,
+        'ocr_metodo': args.ocr_metodo,
+        'export_formato': args.export_formato,
+        'identificar_sku': args.identificar_sku,
+        'catalogo_imagenes': args.catalogo
+    }
+    
+    # Crear componentes con dependencias inyectadas
+    componentes = ComponentFactory.desde_config(config)
+    
+    # Crear sistema con dependencias inyectadas
     sistema = SistemaInventarioGondola(
-        modelo_path=args.modelo,
-        confianza_minima=args.confianza,
-        reconocer_marcas=not args.sin_marcas
+        detector=componentes['detector'],
+        identificador_sku=componentes['identificador_sku'],
+        sku_threshold=args.sku_threshold
     )
     
     # Ejecutar procesamiento
@@ -272,7 +406,8 @@ Ejemplos de uso:
             fps_extraccion=args.fps,
             rotar_frames=args.rotar,
             detectar=not args.sin_deteccion,
-            generar_anotaciones=not args.sin_anotaciones
+            generar_anotaciones=not args.sin_anotaciones,
+            guardar_crops=args.guardar_crops or args.identificar_sku
         )
         
         if resultados:

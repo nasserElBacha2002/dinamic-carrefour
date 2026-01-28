@@ -1,54 +1,67 @@
-# Entorno virtual
-venv/
-env/
-ENV/
-
-# Archivos Python
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# Outputs del sistema
-output/
-*.json
-!requirements.txt
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
 
-# Frames extraídos (pueden ser grandes)
-frames_extraidos/
-frames_analysis/
-
-# Datos de entrada
-data/
-*.MOV
-*.mp4
-*.avi
-*.mkv
-
-# Videos procesados
-*.MOV
-*.mp4
-*.avi
-*.mkv
-
-# Archivos del sistema
-.DS_Store
-Thumbs.db
-
-# IDEs
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
+.DS_Store
 
-# Modelos entrenados (pueden ser grandes)
-# Excluir archivos de modelo pero permitir documentación
+# Project specific
+output/
+*.mp4
+*.mov
+*.avi
+*.MOV
+embeddings.pkl
 *.pt
-*.pth
-*.onnx
-# modelos/  # Comentado para permitir README.md y estructura
+!modelos/*.pt
 
 # Logs
 *.log
 
+# Temporary files
+*.tmp
+temp/
+tmp/
+
+# Test files
+tests/test_*.csv
+tests/temp_*
+
+# Cache
+.cache/
+*.cache
+
+# OS
+Thumbs.db
+.DS_Store

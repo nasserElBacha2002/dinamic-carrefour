@@ -8,10 +8,19 @@ import cv2
 import os
 import json
 from pathlib import Path
+from typing import Optional, Dict, List, Any, Tuple
+from tqdm import tqdm
 
-def analizar_video(video_path):
-    """Analiza el video y extrae información relevante"""
+def analizar_video(video_path: str) -> Optional[Dict[str, Any]]:
+    """
+    Analiza el video y extrae información relevante
     
+    Args:
+        video_path: Ruta al archivo de video
+        
+    Returns:
+        Diccionario con información del video y análisis, o None si falla
+    """
     print("=" * 60)
     print("ANÁLISIS DEL VIDEO DE GÓNDOLA")
     print("=" * 60)
@@ -51,20 +60,22 @@ def analizar_video(video_path):
             timestamp = idx / fps if fps > 0 else 0
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
-            # Métricas básicas
+            # Métricas de calidad
             brightness = gray.mean()
             contrast = gray.std()
+            sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()  # Detectar blur
             
             frames_analisis.append({
                 'frame': idx,
                 'timestamp': timestamp,
                 'brightness': brightness,
                 'contrast': contrast,
+                'sharpness': sharpness,
                 'width': width,
                 'height': height
             })
             
-            print(f"   Frame {idx:4d} ({timestamp:.2f}s): Brillo={brightness:.1f}, Contraste={contrast:.1f}")
+            print(f"   Frame {idx:4d} ({timestamp:.2f}s): Brillo={brightness:.1f}, Contraste={contrast:.1f}, Nitidez={sharpness:.1f}")
     
     cap.release()
     
@@ -72,9 +83,11 @@ def analizar_video(video_path):
     print(f"\n📊 RESUMEN:")
     avg_brightness = sum(f['brightness'] for f in frames_analisis) / len(frames_analisis)
     avg_contrast = sum(f['contrast'] for f in frames_analisis) / len(frames_analisis)
+    avg_sharpness = sum(f['sharpness'] for f in frames_analisis) / len(frames_analisis)
     
     print(f"   Brillo promedio: {avg_brightness:.1f}")
     print(f"   Contraste promedio: {avg_contrast:.1f}")
+    print(f"   Nitidez promedio: {avg_sharpness:.1f}")
     
     # Recomendaciones
     print(f"\n💡 RECOMENDACIONES PARA EL MVP:")
@@ -90,6 +103,11 @@ def analizar_video(video_path):
         print("   ⚠️  Contraste bajo - puede afectar detección")
     else:
         print("   ✅ Contraste adecuado")
+    
+    if avg_sharpness < 100:
+        print("   ⚠️  Video borroso - puede afectar detección y OCR")
+    else:
+        print("   ✅ Nitidez adecuada")
     
     # Orientación
     if height > width:
@@ -116,12 +134,22 @@ def analizar_video(video_path):
         'frames_analysis': frames_analisis,
         'summary': {
             'avg_brightness': avg_brightness,
-            'avg_contrast': avg_contrast
+            'avg_contrast': avg_contrast,
+            'avg_sharpness': avg_sharpness
         }
     }
 
 
-def exportar_frames(video_path, output_dir="frames_extraidos", fps_extraccion=1, rotar=False):
+def exportar_frames(
+    video_path: str, 
+    output_dir: str = "frames_extraidos", 
+    fps_extraccion: float = 1.0, 
+    rotar: Optional[int] = None,
+    formato: str = 'jpg',
+    calidad: int = 95,
+    filtrar_borrosos: bool = False,
+    umbral_nitidez: float = 100.0
+) -> List[str]:
     """
     Exporta frames del video como imágenes
     
@@ -129,7 +157,11 @@ def exportar_frames(video_path, output_dir="frames_extraidos", fps_extraccion=1,
         video_path: Ruta al archivo de video
         output_dir: Directorio donde guardar los frames
         fps_extraccion: Frames por segundo a extraer (default: 1 para MVP)
-        rotar: Si True, rota los frames 90° (útil para videos verticales)
+        rotar: Grados de rotación (None, 90, 180, 270)
+        formato: Formato de salida ('jpg' o 'png')
+        calidad: Calidad de compresión JPEG (1-100, default: 95)
+        filtrar_borrosos: Si True, descarta frames con baja nitidez
+        umbral_nitidez: Umbral mínimo de nitidez (default: 100.0)
     
     Returns:
         Lista de rutas de los frames exportados
@@ -154,8 +186,12 @@ def exportar_frames(video_path, output_dir="frames_extraidos", fps_extraccion=1,
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    # Calcular intervalo de frames
-    frame_interval = int(fps_video / fps_extraccion) if fps_video > 0 else 1
+    # Calcular intervalo de frames (protección contra división por cero y fps_extraccion > fps_video)
+    if fps_video <= 0 or fps_extraccion <= 0:
+        frame_interval = 1
+    else:
+        frame_interval = max(1, int(fps_video / fps_extraccion))
+    
     total_frames_extraer = int(frame_count / frame_interval) + 1
     
     print(f"\n📹 Configuración de extracción:")
@@ -163,48 +199,77 @@ def exportar_frames(video_path, output_dir="frames_extraidos", fps_extraccion=1,
     print(f"   FPS de extracción: {fps_extraccion}")
     print(f"   Intervalo: cada {frame_interval} frames")
     print(f"   Frames a extraer: ~{total_frames_extraer}")
+    print(f"   Formato: {formato.upper()} (calidad: {calidad})")
+    if filtrar_borrosos:
+        print(f"   Filtro de nitidez: ACTIVADO (umbral: {umbral_nitidez})")
+    if rotar:
+        print(f"   Rotación: {rotar}°")
     print(f"   Directorio de salida: {output_dir}")
     
     frames_exportados = []
     frame_num = 0
     frames_guardados = 0
+    frames_descartados = 0
     
     print(f"\n💾 Guardando frames...")
     
-    while True:
-        ret, frame = cap.read()
-        
-        if not ret:
-            break
-        
-        # Extraer frame si corresponde al intervalo
-        if frame_num % frame_interval == 0:
-            # Rotar si es necesario
-            if rotar:
-                # Rotar 90° en sentido horario
-                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+    # Barra de progreso
+    with tqdm(total=frame_count, desc="Extrayendo", unit="frame") as pbar:
+        while True:
+            ret, frame = cap.read()
             
-            # Calcular timestamp
-            timestamp = frame_num / fps_video if fps_video > 0 else 0
+            if not ret:
+                break
             
-            # Nombre del archivo
-            nombre_frame = f"frame_{frames_guardados:04d}_t{timestamp:.2f}s.jpg"
-            ruta_completa = os.path.join(output_dir, nombre_frame)
+            # Extraer frame si corresponde al intervalo
+            if frame_num % frame_interval == 0:
+                # Rotar si es necesario
+                if rotar == 90:
+                    frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                elif rotar == 180:
+                    frame = cv2.rotate(frame, cv2.ROTATE_180)
+                elif rotar == 270:
+                    frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                
+                # Filtrar frames borrosos si está activado
+                if filtrar_borrosos:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    nitidez = cv2.Laplacian(gray, cv2.CV_64F).var()
+                    if nitidez < umbral_nitidez:
+                        frames_descartados += 1
+                        frame_num += 1
+                        pbar.update(1)
+                        continue
+                
+                # Calcular timestamp
+                timestamp = frame_num / fps_video if fps_video > 0 else 0
+                
+                # Nombre del archivo
+                nombre_frame = f"frame_{frames_guardados:04d}_t{timestamp:.2f}s.{formato}"
+                ruta_completa = os.path.join(output_dir, nombre_frame)
+                
+                # Guardar frame con formato y calidad especificados
+                if formato.lower() == 'jpg' or formato.lower() == 'jpeg':
+                    cv2.imwrite(ruta_completa, frame, [cv2.IMWRITE_JPEG_QUALITY, calidad])
+                elif formato.lower() == 'png':
+                    # PNG: calidad invertida (0=mejor, 9=peor compresión)
+                    compresion = int((100 - calidad) / 10)
+                    cv2.imwrite(ruta_completa, frame, [cv2.IMWRITE_PNG_COMPRESSION, compresion])
+                else:
+                    cv2.imwrite(ruta_completa, frame)
+                
+                frames_exportados.append(ruta_completa)
+                frames_guardados += 1
             
-            # Guardar frame
-            cv2.imwrite(ruta_completa, frame)
-            frames_exportados.append(ruta_completa)
-            frames_guardados += 1
-            
-            if frames_guardados % 5 == 0:
-                print(f"   ✓ Guardados {frames_guardados} frames...")
-        
-        frame_num += 1
+            frame_num += 1
+            pbar.update(1)
     
     cap.release()
     
     print(f"\n✅ Exportación completada:")
     print(f"   Total de frames guardados: {frames_guardados}")
+    if filtrar_borrosos and frames_descartados > 0:
+        print(f"   Frames descartados (borrosos): {frames_descartados}")
     print(f"   Ubicación: {os.path.abspath(output_dir)}")
     
     return frames_exportados
@@ -217,7 +282,11 @@ if __name__ == "__main__":
     parser.add_argument('--exportar-frames', action='store_true', help='Exportar frames como imágenes')
     parser.add_argument('--output-dir', default='frames_extraidos', help='Directorio para frames exportados')
     parser.add_argument('--fps', type=float, default=1.0, help='Frames por segundo a extraer (default: 1.0)')
-    parser.add_argument('--rotar', action='store_true', help='Rotar frames 90° (para videos verticales)')
+    parser.add_argument('--rotar', type=int, choices=[90, 180, 270], help='Rotar frames (90, 180 o 270 grados)')
+    parser.add_argument('--formato', choices=['jpg', 'png'], default='jpg', help='Formato de imagen (default: jpg)')
+    parser.add_argument('--calidad', type=int, default=95, help='Calidad de compresión 1-100 (default: 95)')
+    parser.add_argument('--filtrar-borrosos', action='store_true', help='Descartar frames borrosos automáticamente')
+    parser.add_argument('--umbral-nitidez', type=float, default=100.0, help='Umbral de nitidez mínima (default: 100.0)')
     
     args = parser.parse_args()
     video_path = args.video
@@ -241,7 +310,11 @@ if __name__ == "__main__":
             video_path, 
             output_dir=args.output_dir,
             fps_extraccion=args.fps,
-            rotar=args.rotar
+            rotar=args.rotar,
+            formato=args.formato,
+            calidad=args.calidad,
+            filtrar_borrosos=args.filtrar_borrosos,
+            umbral_nitidez=args.umbral_nitidez
         )
         
         # Guardar lista de frames exportados en JSON
