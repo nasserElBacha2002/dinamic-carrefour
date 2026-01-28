@@ -2,15 +2,40 @@
 """
 Sistema de detección de productos en góndolas usando YOLOv8
 MVP - Sistema de Inventario de Góndolas
+
+MEJORADO: Implementa Dependency Inversion Principle (DIP)
+- Acepta reconocedor de marcas inyectado
+- Acepta exportador de reportes inyectado
+- Desacoplado de implementaciones concretas
 """
 
 import cv2
 import os
 import json
 import csv
+import hashlib
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 from datetime import datetime
+
+# Importar utilidades de procesamiento de imágenes
+from src.utils.image_utils import (
+    cargar_imagen_segura,
+    buscar_imagenes,
+    clamp_bbox,
+    validar_bbox,
+    buscar_frame
+)
+
+# Importar exportadores (Open/Closed Principle)
+from src.exporters import ReporteExporterBase, CSVExporter
+
+# Importar protocolo de reconocedor de marcas (Dependency Inversion)
+try:
+    from src.protocols import ReconocedorMarcasProtocol
+except ImportError:
+    # Fallback si protocols no existe (backward compatibility)
+    ReconocedorMarcasProtocol = None
 
 # Importar configuración local
 try:
@@ -34,7 +59,7 @@ except ImportError:
     YOLO_AVAILABLE = False
     print("⚠️  Advertencia: ultralytics no está instalado. Instalar con: pip install ultralytics")
 
-# Importar reconocedor de marcas
+# Importar reconocedor de marcas (opcional, con backward compatibility)
 try:
     from src.reconocer_marcas import ReconocedorMarcas
     RECONOCIMIENTO_MARCAS_AVAILABLE = True
@@ -46,34 +71,37 @@ except ImportError:
 class DetectorProductos:
     """
     Clase principal para detección de productos en imágenes de góndolas
+    
+    SOLID Improvements:
+    - Dependency Inversion: Acepta reconocedor de marcas y exportador inyectados
+    - Single Responsibility: Se enfoca en detección, delega OCR y exportación
     """
     
-    def __init__(self, modelo_path: Optional[str] = None, confianza_minima: float = None, 
-                 reconocer_marcas: bool = True):
+    def __init__(
+        self, 
+        modelo_path: Optional[str] = None, 
+        confianza_minima: float = None,
+        reconocedor_marcas: Optional[object] = None,  # ReconocedorMarcasProtocol
+        exporter: Optional[ReporteExporterBase] = None
+    ):
         """
-        Inicializa el detector de productos
+        Inicializa el detector de productos con inyección de dependencias
         
         Args:
-            modelo_path: Ruta al modelo YOLOv8 entrenado (.pt). 
-                        Si es None, usa el modelo por defecto de config.py
-            confianza_minima: Umbral mínimo de confianza para detecciones (0-1)
-                             Si es None, usa el valor por defecto de config.py
-            reconocer_marcas: Si True, intenta reconocer marcas usando OCR
+            modelo_path: Ruta al modelo YOLOv8 (.pt)
+            confianza_minima: Umbral mínimo de confianza (0-1)
+            reconocedor_marcas: Instancia de reconocedor de marcas (inyección)
+            exporter: Instancia de exportador de reportes (inyección)
         """
         self.confianza_minima = confianza_minima if confianza_minima is not None else CONFIANZA_MINIMA_DEFAULT
         self.modelo = None
         self.clases_detectadas = {}
-        self.reconocer_marcas = reconocer_marcas
         
-        # Inicializar reconocedor de marcas si está disponible
-        self.reconocedor_marcas = None
-        if reconocer_marcas and RECONOCIMIENTO_MARCAS_AVAILABLE:
-            try:
-                self.reconocedor_marcas = ReconocedorMarcas(metodo='easyocr')
-                print("✅ Reconocimiento de marcas activado")
-            except Exception as e:
-                print(f"⚠️  No se pudo inicializar reconocimiento de marcas: {e}")
-                self.reconocedor_marcas = None
+        # Dependency Injection: reconocedor de marcas
+        self.reconocedor_marcas = reconocedor_marcas
+        
+        # Dependency Injection: exportador (default CSVExporter)
+        self.exporter = exporter if exporter is not None else CSVExporter()
         
         # Si no se especifica modelo_path, usar el por defecto
         if modelo_path is None:
@@ -114,18 +142,22 @@ class DetectorProductos:
             print(f"❌ Error al cargar modelo: {e}")
             return False
     
-    def detectar_en_imagen(self, ruta_imagen: str) -> List[Dict]:
+    def detectar_en_imagen(self, ruta_imagen: str, guardar_crops: bool = False,
+                          crops_dir: Optional[str] = None) -> List[Dict]:
         """
         Detecta productos en una imagen
         
         Args:
             ruta_imagen: Ruta a la imagen a procesar
+            guardar_crops: Si True, guarda cada detección como imagen individual (crop)
+            crops_dir: Directorio donde guardar los crops (si None, usa 'crops/')
         
         Returns:
             Lista de detecciones, cada una con:
             - clase: nombre del SKU/producto
             - confianza: nivel de confianza (0-1)
             - bbox: [x1, y1, x2, y2] coordenadas del bounding box
+            - crop_path: ruta al crop guardado (si guardar_crops=True)
         """
         if not os.path.exists(ruta_imagen):
             print(f"❌ Error: No se encuentra la imagen {ruta_imagen}")
@@ -135,10 +167,9 @@ class DetectorProductos:
             print("⚠️  Modo simulación: No hay modelo cargado")
             return self._simular_deteccion(ruta_imagen)
         
-        # Cargar imagen
-        imagen = cv2.imread(ruta_imagen)
+        # Cargar imagen con validación
+        imagen = cargar_imagen_segura(ruta_imagen)
         if imagen is None:
-            print(f"❌ Error: No se pudo leer la imagen {ruta_imagen}")
             return []
         
         # Ejecutar detección con YOLOv8
@@ -168,8 +199,16 @@ class DetectorProductos:
                 
                 detecciones.append(deteccion)
         
-        # Reconocer marcas si está habilitado
-        if self.reconocer_marcas and self.reconocedor_marcas and detecciones:
+        # Guardar crops si está habilitado
+        if guardar_crops and detecciones:
+            crops_guardados = self._guardar_crops(imagen, detecciones, ruta_imagen, crops_dir)
+            # Actualizar detecciones con rutas de crops
+            for i, crop_path in enumerate(crops_guardados):
+                if i < len(detecciones):
+                    detecciones[i]['crop_path'] = crop_path
+        
+        # Reconocer marcas si está habilitado (usa dependencia inyectada)
+        if self.reconocedor_marcas and detecciones:
             print(f"   🔍 Reconociendo marcas en {len(detecciones)} productos...")
             # Cargar marcas conocidas desde configuración (opcional)
             marcas_conocidas = cargar_marcas_conocidas()
@@ -186,6 +225,70 @@ class DetectorProductos:
         
         return detecciones
     
+    def _guardar_crops(self, imagen, detecciones: List[Dict], ruta_imagen_original: str,
+                      crops_dir: Optional[str] = None) -> List[str]:
+        """
+        Guarda cada detección como una imagen individual (crop)
+        
+        Args:
+            imagen: Imagen OpenCV (numpy array)
+            detecciones: Lista de detecciones
+            ruta_imagen_original: Ruta de la imagen original
+            crops_dir: Directorio donde guardar crops
+        
+        Returns:
+            Lista de rutas donde se guardaron los crops
+        """
+        if crops_dir is None:
+            crops_dir = "crops"
+        
+        crops_path = Path(crops_dir)
+        crops_path.mkdir(parents=True, exist_ok=True)
+        
+        frame_name = Path(ruta_imagen_original).stem
+        crops_guardados = []
+        
+        # Obtener dimensiones de imagen
+        h, w = imagen.shape[:2]
+        
+        for i, deteccion in enumerate(detecciones):
+            # Clamp bbox a límites de imagen
+            x1, y1, x2, y2 = clamp_bbox(deteccion['bbox'], w, h)
+            
+            # Validar que el bbox es válido
+            if not validar_bbox(x1, y1, x2, y2):
+                print(f"⚠️  Bbox inválido para detección {i}: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
+                crops_guardados.append("")
+                continue
+            
+            # Extraer crop
+            crop = imagen[y1:y2, x1:x2]
+            
+            # Validar que el crop no esté vacío
+            if crop.size == 0:
+                print(f"⚠️  Crop vacío para detección {i}")
+                crops_guardados.append("")
+                continue
+            
+            # Generar nombre de archivo
+            clase = deteccion['clase'].replace('/', '_').replace(' ', '_')
+            crop_filename = f"crop_{frame_name}_{i:03d}_{clase}.jpg"
+            crop_path = crops_path / crop_filename
+            
+            # Guardar crop
+            try:
+                cv2.imwrite(str(crop_path), crop)
+                crops_guardados.append(str(crop_path))
+            except Exception as e:
+                print(f"⚠️  Error guardando crop {crop_filename}: {e}")
+                crops_guardados.append("")
+        
+        if crops_guardados:
+            crops_validos = sum(1 for c in crops_guardados if c)
+            print(f"   📦 Guardados {crops_validos}/{len(detecciones)} crops en: {crops_dir}")
+        
+        return crops_guardados
+    
     def _simular_deteccion(self, ruta_imagen: str) -> List[Dict]:
         """
         Simula detecciones cuando no hay modelo disponible (para desarrollo)
@@ -193,12 +296,15 @@ class DetectorProductos:
         print(f"🔍 [SIMULACIÓN] Analizando {ruta_imagen}")
         return []
     
-    def procesar_frames(self, directorio_frames: str) -> Dict[str, List[Dict]]:
+    def procesar_frames(self, directorio_frames: str, guardar_crops: bool = False,
+                       crops_dir: Optional[str] = None) -> Dict[str, List[Dict]]:
         """
         Procesa todos los frames en un directorio
         
         Args:
             directorio_frames: Directorio con las imágenes de frames
+            guardar_crops: Si True, guarda crops de cada detección
+            crops_dir: Directorio donde guardar crops (si None, usa 'crops/')
         
         Returns:
             Diccionario con frame -> lista de detecciones
@@ -212,35 +318,44 @@ class DetectorProductos:
             return {}
         
         # Buscar todas las imágenes
-        extensiones = ['.jpg', '.jpeg', '.png']
-        imagenes = []
-        for ext in extensiones:
-            imagenes.extend(Path(directorio_frames).glob(f"*{ext}"))
-        
-        imagenes = sorted(imagenes)
+        imagenes = buscar_imagenes(directorio_frames)
         
         if not imagenes:
             print(f"⚠️  No se encontraron imágenes en {directorio_frames}")
             return {}
         
         print(f"\n📸 Encontradas {len(imagenes)} imágenes para procesar")
+        if guardar_crops:
+            print(f"📦 Generación de crops: ACTIVADA → {crops_dir or 'crops/'}")
         
         resultados = {}
         total_detecciones = 0
+        total_crops = 0
         
         for i, ruta_imagen in enumerate(imagenes, 1):
             print(f"\n[{i}/{len(imagenes)}] Procesando: {ruta_imagen.name}")
             
-            detecciones = self.detectar_en_imagen(str(ruta_imagen))
+            detecciones = self.detectar_en_imagen(
+                str(ruta_imagen),
+                guardar_crops=guardar_crops,
+                crops_dir=crops_dir
+            )
             # Usar nombre del archivo como clave pero guardar ruta completa en detecciones
             resultados[ruta_imagen.name] = detecciones
             total_detecciones += len(detecciones)
+            
+            # Contar crops guardados
+            if guardar_crops:
+                crops_en_frame = sum(1 for det in detecciones if det.get('crop_path'))
+                total_crops += crops_en_frame
             
             print(f"   ✓ Detectados {len(detecciones)} productos")
         
         print(f"\n✅ Procesamiento completado:")
         print(f"   Frames procesados: {len(imagenes)}")
         print(f"   Total de detecciones: {total_detecciones}")
+        if guardar_crops:
+            print(f"   Total de crops guardados: {total_crops}")
         
         return resultados
     
@@ -278,9 +393,8 @@ class DetectorProductos:
         Returns:
             Ruta de la imagen guardada
         """
-        imagen = cv2.imread(ruta_imagen)
+        imagen = cargar_imagen_segura(ruta_imagen)
         if imagen is None:
-            print(f"❌ Error: No se pudo leer {ruta_imagen}")
             return ""
         
         # Dibujar bounding boxes
@@ -289,8 +403,8 @@ class DetectorProductos:
             clase = deteccion['clase']
             confianza = deteccion['confianza']
             
-            # Color según clase (hash simple)
-            color_hash = hash(clase) % 256
+            # Color según clase (hash determinístico con MD5)
+            color_hash = int(hashlib.md5(clase.encode('utf-8')).hexdigest()[:8], 16) % 256
             color = (
                 (color_hash * 7) % 256,
                 (color_hash * 11) % 256,
@@ -330,48 +444,22 @@ class DetectorProductos:
     
     def exportar_csv(self, conteo: Dict[str, int], output_path: str = "inventario.csv"):
         """
-        Exporta el conteo de productos a CSV con información de marcas
+        Exporta el conteo de productos usando el exportador inyectado
+        Usa Dependency Injection para soportar diferentes formatos
         
         Args:
             conteo: Diccionario con SKU/Marca -> cantidad
-            output_path: Ruta del archivo CSV a generar
+            output_path: Ruta del archivo a generar
         """
-        print(f"\n💾 Exportando inventario a CSV: {output_path}")
+        print(f"\n💾 Exportando inventario a: {output_path}")
         
-        with open(output_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['Producto/Marca', 'Cantidad Detectada', 'Fecha'])
-            
-            fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Separar productos genéricos y productos con marca
-            productos_marca = {}
-            productos_genericos = {}
-            
-            for sku, cantidad in sorted(conteo.items()):
-                if '_' in sku and any(marca in sku for marca in ['Susante', 'Levite', 'SUSANTE', 'LEVITE']):
-                    # Es un producto con marca identificada
-                    productos_marca[sku] = cantidad
-                else:
-                    productos_genericos[sku] = cantidad
-            
-            # Escribir productos con marca primero
-            for sku, cantidad in sorted(productos_marca.items()):
-                writer.writerow([sku, cantidad, fecha])
-            
-            # Luego productos genéricos
-            for sku, cantidad in sorted(productos_genericos.items()):
-                writer.writerow([sku, cantidad, fecha])
-        
-        print(f"✅ CSV exportado: {output_path}")
-        print(f"   Total de SKUs: {len(conteo)}")
-        print(f"   Total de productos: {sum(conteo.values())}")
-        if productos_marca:
-            print(f"   Productos con marca identificada: {len(productos_marca)}")
+        # Usar exportador inyectado (Open/Closed Principle)
+        self.exporter.exportar(conteo, output_path)
     
     def generar_reporte_completo(self, resultados: Dict[str, List[Dict]], 
                                 output_dir: str = "reporte_deteccion",
-                                frames_dir: Optional[str] = None):
+                                frames_dir: Optional[str] = None,
+                                generar_anotaciones: bool = True):
         """
         Genera reporte completo con imágenes anotadas y CSV
         
@@ -379,6 +467,7 @@ class DetectorProductos:
             resultados: Resultados de detección por frame
             output_dir: Directorio donde guardar el reporte
             frames_dir: Directorio donde están las imágenes originales (opcional)
+            generar_anotaciones: Si True, genera imágenes anotadas con bounding boxes
         """
         print("\n" + "=" * 60)
         print("GENERANDO REPORTE COMPLETO")
@@ -393,41 +482,28 @@ class DetectorProductos:
         csv_path = os.path.join(output_dir, "inventario.csv")
         self.exportar_csv(conteo, csv_path)
         
-        # Generar imágenes anotadas
-        print(f"\n🖼️  Generando imágenes anotadas...")
+        # Generar imágenes anotadas (si está habilitado)
         imagenes_anotadas = []
+        if generar_anotaciones:
+            print(f"\n🖼️  Generando imágenes anotadas...")
+        else:
+            print(f"\n⏩ Omitiendo generación de imágenes anotadas")
         
-        for frame_name, detecciones in resultados.items():
-            # Buscar imagen original
-            if frames_dir:
-                # Si se especifica el directorio de frames, buscar ahí
-                frame_path = Path(frames_dir) / frame_name
-            else:
-                # Intentar usar frame_name como ruta completa o relativa
-                frame_path = Path(frame_name)
-                if not frame_path.exists():
-                    # Si no existe, intentar buscar en directorios comunes
-                    posibles_dirs = [
-                        Path("frames_extraidos"),
-                        Path("output") / "frames_extraidos",
-                        Path.cwd()
-                    ]
-                    for dir_base in posibles_dirs:
-                        posible_path = dir_base / frame_name
-                        if posible_path.exists():
-                            frame_path = posible_path
-                            break
-            
-            if frame_path.exists():
-                img_anotada = self.generar_imagen_anotada(
-                    str(frame_path), 
-                    detecciones,
-                    os.path.join(output_dir, f"{Path(frame_name).stem}_detectado.jpg")
-                )
-                if img_anotada:
-                    imagenes_anotadas.append(img_anotada)
-            else:
-                print(f"⚠️  No se encontró imagen: {frame_path}")
+        if generar_anotaciones:
+            for frame_name, detecciones in resultados.items():
+                # Buscar imagen original usando función helper
+                frame_path = buscar_frame(frame_name, frames_dir)
+                
+                if frame_path.exists():
+                    img_anotada = self.generar_imagen_anotada(
+                        str(frame_path), 
+                        detecciones,
+                        os.path.join(output_dir, f"{Path(frame_name).stem}_detectado.jpg")
+                    )
+                    if img_anotada:
+                        imagenes_anotadas.append(img_anotada)
+                else:
+                    print(f"⚠️  No se encontró imagen: {frame_path}")
         
         # Guardar metadatos
         metadata = {
