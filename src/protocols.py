@@ -1,90 +1,139 @@
 #!/usr/bin/env python3
 """
-Protocolos (abstracciones) para componentes del sistema
-Implementa Dependency Inversion Principle (DIP)
+Protocolos (abstracciones) para componentes del sistema — Sprint 2
+
+Define los contratos que deben cumplir las implementaciones.
+Implementa Dependency Inversion Principle (DIP).
 """
 
-from typing import Protocol, List, Dict, Optional
+from typing import Protocol, List, Dict, Optional, Tuple
 from pathlib import Path
+import numpy as np
 
 
 class DetectorProtocol(Protocol):
     """
-    Protocolo para detectores de productos
-    Define el contrato que debe cumplir cualquier implementación de detector
+    Protocolo para detectores genéricos de productos.
+    
+    El detector localiza productos en una imagen sin clasificarlos por SKU.
+    Devuelve bounding boxes + confianza. La clase es genérica ("producto").
     """
-    
-    def detectar_en_imagen(
-        self, 
-        ruta_imagen: str, 
-        guardar_crops: bool = False,
-        crops_dir: Optional[str] = None
-    ) -> List[Dict]:
-        """
-        Detecta productos en una imagen
-        
-        Args:
-            ruta_imagen: Ruta a la imagen
-            guardar_crops: Si guardar crops de detecciones
-            crops_dir: Directorio para crops
-            
-        Returns:
-            Lista de detecciones con bbox, clase, confianza
-        """
-        ...
-    
-    def procesar_frames(
-        self,
-        directorio_frames: str,
-        guardar_crops: bool = False,
-        crops_dir: Optional[str] = None
-    ) -> Dict[str, List[Dict]]:
-        """
-        Procesa múltiples frames
-        
-        Args:
-            directorio_frames: Directorio con imágenes
-            guardar_crops: Si guardar crops
-            crops_dir: Directorio para crops
-            
-        Returns:
-            Diccionario frame -> detecciones
-        """
-        ...
 
-
-class ReconocedorMarcasProtocol(Protocol):
-    """
-    Protocolo para reconocedores de marcas
-    Define el contrato para OCR y reconocimiento
-    """
-    
-    def procesar_detecciones(
+    def detectar(
         self,
         imagen_path: str,
-        detecciones: List[Dict],
-        marcas_conocidas: Optional[List[str]] = None
+        confianza_minima: float = 0.25
     ) -> List[Dict]:
         """
-        Procesa detecciones agregando información de marca
-        
+        Detecta productos en una imagen.
+
         Args:
-            imagen_path: Ruta a la imagen
-            detecciones: Lista de detecciones
-            marcas_conocidas: Marcas conocidas para búsqueda
-            
+            imagen_path: Ruta a la imagen.
+            confianza_minima: Umbral mínimo de confianza (0-1).
+
         Returns:
-            Detecciones con información de marca
+            Lista de detecciones, cada una con:
+                - bbox: [x1, y1, x2, y2] en píxeles
+                - confianza: float (0-1)
+                - clase: str (ej: "producto", "botella")
         """
+        ...
+
+
+class EmbedderProtocol(Protocol):
+    """
+    Protocolo para extractores de embeddings.
+    
+    Convierte una imagen (o crop) en un vector numérico de dimensión fija.
+    """
+
+    def embed(self, imagen_path: str) -> np.ndarray:
+        """
+        Genera embedding de una imagen.
+
+        Args:
+            imagen_path: Ruta a la imagen.
+
+        Returns:
+            Vector numpy de dimensión fija (ej: 512 para CLIP ViT-B/32).
+        """
+        ...
+
+    def embed_batch(self, imagenes: List[str]) -> np.ndarray:
+        """
+        Genera embeddings de múltiples imágenes.
+
+        Args:
+            imagenes: Lista de rutas a imágenes.
+
+        Returns:
+            Matriz numpy (N, D) con un embedding por fila.
+        """
+        ...
+
+    @property
+    def dimension(self) -> int:
+        """Dimensión del vector de embedding."""
+        ...
+
+
+class VectorStoreProtocol(Protocol):
+    """
+    Protocolo para almacenes de vectores (embeddings de SKUs).
+    
+    Guarda embeddings de referencia por SKU y busca los más similares.
+    """
+
+    def agregar_sku(
+        self,
+        ean: str,
+        embeddings: np.ndarray,
+        metadata: Optional[Dict] = None
+    ) -> None:
+        """
+        Agrega o actualiza embeddings de un SKU.
+
+        Args:
+            ean: Código EAN del producto.
+            embeddings: Matriz (N, D) con N embeddings de referencia.
+            metadata: Info adicional (descripción, etc).
+        """
+        ...
+
+    def buscar(
+        self,
+        query: np.ndarray,
+        top_k: int = 3
+    ) -> List[Tuple[str, float]]:
+        """
+        Busca los SKUs más similares a un embedding query.
+
+        Args:
+            query: Vector embedding (D,) del crop a identificar.
+            top_k: Número de candidatos a devolver.
+
+        Returns:
+            Lista de (ean, similaridad) ordenada de mayor a menor.
+        """
+        ...
+
+    def tiene_sku(self, ean: str) -> bool:
+        """Verifica si un SKU ya existe en el store."""
+        ...
+
+    @property
+    def total_skus(self) -> int:
+        """Número total de SKUs en el store."""
         ...
 
 
 class IdentificadorSKUProtocol(Protocol):
     """
-    Protocolo para identificadores de SKU
-    Define el contrato para identificación visual
-    """
+    Protocolo para identificadores de SKU.
     
+    Recibe un crop y devuelve el EAN más probable con su confianza.
+    """
+
     def identificar(
         self,
         crop_path: str,
@@ -92,58 +141,28 @@ class IdentificadorSKUProtocol(Protocol):
         threshold: float = 0.5
     ) -> Dict:
         """
-        Identifica SKU de un crop
-        
-        Args:
-            crop_path: Ruta al crop
-            top_k: Candidatos a retornar
-            threshold: Umbral de similitud
-            
-        Returns:
-            Dict con ean, confianza, top_matches
-        """
-        ...
+        Identifica el SKU de un crop.
 
+        Args:
+            crop_path: Ruta al crop del producto.
+            top_k: Candidatos a retornar.
+            threshold: Umbral mínimo de similitud.
 
-class OCRStrategy(Protocol):
-    """
-    Protocolo para estrategias de OCR
-    Implementa Strategy Pattern para Open/Closed Principle
-    """
-    
-    def extraer_texto(self, imagen, bbox) -> str:
-        """
-        Extrae texto de una región de imagen
-        
-        Args:
-            imagen: Imagen (numpy array)
-            bbox: Bounding box [x1, y1, x2, y2]
-            
         Returns:
-            Texto extraído
-        """
-        ...
-    
-    def extraer_texto_con_confianza(self, imagen, bbox) -> List[tuple]:
-        """
-        Extrae texto con niveles de confianza
-        
-        Args:
-            imagen: Imagen (numpy array)
-            bbox: Bounding box
-            
-        Returns:
-            Lista de (texto, confianza)
+            Dict con:
+                - ean: str (EAN identificado o "UNKNOWN")
+                - confianza: float (similitud del mejor match)
+                - top_matches: List[Tuple[str, float]] (top-k candidatos)
+                - status: str ("matched", "unknown", "ambiguous")
         """
         ...
 
 
 class ReporteExporter(Protocol):
     """
-    Protocolo para exportadores de reportes
-    Implementa Strategy Pattern para diferentes formatos
+    Protocolo para exportadores de reportes.
     """
-    
+
     def exportar(
         self,
         conteo: Dict[str, int],
@@ -151,40 +170,14 @@ class ReporteExporter(Protocol):
         metadata: Optional[Dict] = None
     ) -> str:
         """
-        Exporta conteo de productos a archivo
-        
-        Args:
-            conteo: Diccionario SKU -> cantidad
-            output_path: Ruta de salida
-            metadata: Metadata adicional
-            
-        Returns:
-            Ruta del archivo generado
-        """
-        ...
+        Exporta conteo de productos a archivo.
 
-
-class VisualizadorProtocol(Protocol):
-    """
-    Protocolo para visualizadores de detecciones
-    Separa visualización de detección (ISP)
-    """
-    
-    def generar_imagen_anotada(
-        self,
-        ruta_imagen: str,
-        detecciones: List[Dict],
-        output_path: Optional[str] = None
-    ) -> str:
-        """
-        Genera imagen con bounding boxes
-        
         Args:
-            ruta_imagen: Ruta a imagen original
-            detecciones: Lista de detecciones
-            output_path: Ruta de salida
-            
+            conteo: Diccionario EAN -> cantidad.
+            output_path: Ruta de salida.
+            metadata: Metadata adicional.
+
         Returns:
-            Ruta de imagen generada
+            Ruta del archivo generado.
         """
         ...

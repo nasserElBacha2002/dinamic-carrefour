@@ -1,71 +1,44 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+dist/
+build/
 
-# Virtual Environment
+# Entorno virtual
 venv/
+.venv/
 env/
-ENV/
-env.bak/
-venv.bak/
+
+# Variables de entorno
+.env
+
+# Modelos descargados (se descargan automáticamente)
+*.pt
+*.pth
+*.onnx
+
+# Output de ejecuciones
+output/
+
+# Cache de embeddings (se regeneran)
+catalog/embeddings/*.npy
+catalog/index.json
+
+# Review (datos temporales de revisión)
+review/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 .DS_Store
 
-# Project specific
-output/
-*.mp4
-*.mov
-*.avi
-*.MOV
-embeddings.pkl
-*.pt
-!modelos/*.pt
+# Jupyter
+.ipynb_checkpoints/
 
-# Logs
-*.log
-
-# Temporary files
-*.tmp
-temp/
-tmp/
-
-# Test files
-tests/test_*.csv
-tests/temp_*
-
-# Cache
-.cache/
-*.cache
-
-# Secrets / env
-.env
-.env.local
-
-# OS
-Thumbs.db
-.DS_Store
+# Datos temporales
+*.pkl
+*.pickle
+/tmp/
