@@ -1,0 +1,41 @@
+{
+  "_comentario": "Mapeo Roboflow por class_id numérico.",
+  "_sync_info": {
+    "generated_at": "2026-02-18T14:45:17",
+    "source_eans": "eans.txt",
+    "source_class_map": "ean_class_map.json",
+    "note": "Auto-generado por scripts/sync_roboflow_label_map.py"
+  },
+  "0": {
+    "ean": "7750496",
+    "descripcion": "GASEOSA COLA REGULAR PEPSI PET X 2.25 LT"
+  },
+  "1": {
+    "ean": "7791813421719",
+    "descripcion": "GASEOSA COLA REGULAR PEPSI PET X 1.5 LT"
+  },
+  "2": {
+    "ean": "7791813423775",
+    "descripcion": "GASEOSA PEPSI BLACK PET X 1.5 LT"
+  },
+  "3": {
+    "ean": "7790895000997",
+    "descripcion": "GASEOSA COLA REGULAR COCA COLA PET X 2.25 LT"
+  },
+  "4": {
+    "ean": "7790895000430",
+    "descripcion": "GASEOSA COLA REGULAR COCA COLA PET X 1.5 LT"
+  },
+  "5": {
+    "ean": "7790895001130",
+    "descripcion": "GASEOSA COCA COLA ZERO PET X 1.5 LT"
+  },
+  "6": {
+    "ean": null,
+    "descripcion": "Botella genérica (sin EAN asignado)"
+  },
+  "7": {
+    "ean": "7790315058201",
+    "descripcion": "AGUA MINERAL VILLAVICENCIO SPORT PET X 750 ML"
+  }
+}

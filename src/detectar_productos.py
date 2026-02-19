@@ -486,24 +486,23 @@ class DetectorProductos:
         imagenes_anotadas = []
         if generar_anotaciones:
             print(f"\n🖼️  Generando imágenes anotadas...")
-        else:
-            print(f"\n⏩ Omitiendo generación de imágenes anotadas")
         
-        if generar_anotaciones:
-            for frame_name, detecciones in resultados.items():
+        for frame_name, detecciones in resultados.items():
                 # Buscar imagen original usando función helper
                 frame_path = buscar_frame(frame_name, frames_dir)
-                
-                if frame_path.exists():
-                    img_anotada = self.generar_imagen_anotada(
-                        str(frame_path), 
-                        detecciones,
-                        os.path.join(output_dir, f"{Path(frame_name).stem}_detectado.jpg")
-                    )
-                    if img_anotada:
-                        imagenes_anotadas.append(img_anotada)
-                else:
-                    print(f"⚠️  No se encontró imagen: {frame_path}")
+
+                if frame_path and frame_path.exists():
+                img_anotada = self.generar_imagen_anotada(
+                    str(frame_path), 
+                    detecciones,
+                    os.path.join(output_dir, f"{Path(frame_name).stem}_detectado.jpg")
+                )
+                if img_anotada:
+                    imagenes_anotadas.append(img_anotada)
+            else:
+                print(f"⚠️  No se encontró imagen: {frame_path}")
+        else:
+            print(f"\n⏩ Omitiendo generación de imágenes anotadas")
         
         # Guardar metadatos
         metadata = {
