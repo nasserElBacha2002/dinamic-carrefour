@@ -1,665 +1,625 @@
-# Sistema de Inventario de Góndolas MVP - Carrefour
+# Sistema de Inventario de Góndolas — Roboflow
 
-Sistema de visión artificial **enterprise-ready** para detectar productos en góndolas de supermercados e identificar SKUs (EANs) a partir de videos.
-
-## 📋 Descripción
-
-Este sistema procesa videos de góndolas de supermercado para:
-- **Detectar productos** usando YOLOv8 (detección de objetos)
-- **Generar crops** de cada producto detectado
-- **Identificar SKU/EAN** usando retrieval visual (comparación con catálogo)
-- **Contar cantidades** visibles de cada producto
-- **Reconocer marcas** usando OCR configurable (EasyOCR/Tesseract)
-- **Generar reportes** en múltiples formatos (CSV, JSON)
-
-### Arquitectura del Sistema
-
-```
-Video → Análisis → Frames → Detección → Crops → Identificación SKU → Reporte
-                                  ↓                    ↓
-                              YOLOv8            Retrieval Visual
-                                                (vs Catálogo)
-```
-
-### Estado Actual
-
-- ✅ Pipeline completo funcional (análisis → detección → identificación SKU → reporte)
-- ✅ Generación de crops de productos detectados
-- ✅ Identificación SKU mediante retrieval visual
-- ✅ Catálogo de 106 imágenes de referencia para 21 SKUs
-- ✅ Reconocimiento de marcas con OCR configurable
-- ✅ **Arquitectura SOLID** implementada (4.5/5 puntos)
-- ✅ **Dependency Injection** y **Strategy Pattern**
-- ✅ Exportación multi-formato (CSV, JSON)
-- ✅ Sistema extensible y testeable
-- ⚠️ Usa modelo pre-entrenado genérico (YOLOv8n COCO)
-- 📝 Para producción, se requiere entrenar modelo personalizado
-
-### 🏆 Calidad del Código
-
-| Principio SOLID | Puntuación |
-|-----------------|-----------|
-| **S** - Single Responsibility | ★★★★★ (5/5) |
-| **O** - Open/Closed | ★★★★★ (5/5) |
-| **I** - Interface Segregation | ★★★☆☆ (3/5) |
-| **D** - Dependency Inversion | ★★★★★ (5/5) |
-| **TOTAL** | **★★★★½ (4.5/5)** |
+Sistema de visión artificial para **detectar, clasificar y contar** productos en góndolas de supermercado a partir de videos, usando **Roboflow** como motor de inferencia en la nube.
 
 ---
 
-## 🏗️ Arquitectura Completa
+## Tabla de Contenidos
 
-### Flujo del Sistema
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│ FASE 1: GENERACIÓN DE CATÁLOGO (una vez)                    │
-└──────────────────────────────────────────────────────────────┘
-
-eans.txt → buscarimagenes.py → imagenes/EAN/*.jpg
-   (22 SKUs)                    (106 imágenes)
-
-
-┌──────────────────────────────────────────────────────────────┐
-│ FASE 2: PROCESAMIENTO DE VIDEO                              │
-└──────────────────────────────────────────────────────────────┘
-
-Video.MOV
-   ↓
-1. Análisis de video (metadata)
-   ↓
-2. Extracción de frames (1 FPS)
-   ↓
-3. Detección YOLOv8 + Generación de crops
-   ↓
-4. Identificación SKU (retrieval visual vs catálogo)
-   ↓
-5. Reporte CSV (EAN, cantidad, fecha)
-```
-
-### Componentes Principales
-
-#### Módulos Core
-1. **`main.py`**: Orquestador principal del pipeline completo
-2. **`analizar_video.py`**: Extrae metadata y frames del video (con detección de nitidez)
-3. **`detectar_productos.py`**: Detección YOLOv8 + generación de crops
-4. **`identificar_sku_retrieval.py`**: Identificación SKU usando embeddings visuales
-5. **`reconocer_marcas.py`**: OCR para identificar marcas
-
-#### Arquitectura SOLID
-6. **`protocols.py`**: Abstracciones (interfaces Protocol) para DIP
-7. **`ocr_strategies.py`**: Strategy Pattern para OCR (Tesseract/EasyOCR/Dummy)
-8. **`exporters.py`**: Strategy Pattern para exportación (CSV/JSON/Multi)
-9. **`factory.py`**: Component Factory para Dependency Injection
-10. **`utils/`**: Utilidades compartidas (procesamiento de imágenes)
-
-#### Scripts Auxiliares
-11. **`buscarimagenes.py`**: Descarga imágenes de referencia por EAN desde Bing
+1. [Qué hace el sistema](#qué-hace-el-sistema)
+2. [Arquitectura general](#arquitectura-general)
+3. [Estructura del proyecto](#estructura-del-proyecto)
+4. [Requisitos previos](#requisitos-previos)
+5. [Instalación](#instalación)
+6. [Configuración](#configuración)
+7. [Uso principal — procesar un video](#uso-principal--procesar-un-video)
+8. [Argumentos CLI de `run.py`](#argumentos-cli-de-runpy)
+9. [Catálogo de productos (`eans.txt`)](#catálogo-de-productos-eanstxt)
+10. [Archivos de mapeo](#archivos-de-mapeo)
+11. [Agregar un producto nuevo (flujo completo)](#agregar-un-producto-nuevo-flujo-completo)
+12. [Subir imágenes a Roboflow](#subir-imágenes-a-roboflow)
+13. [Sincronizar label map](#sincronizar-label-map)
+14. [Reentrenar el modelo en Roboflow](#reentrenar-el-modelo-en-roboflow)
+15. [Confianza del modelo](#confianza-del-modelo)
+16. [Diferencia entre ROBOFLOW_PROJECT y ROBOFLOW_WORKFLOW](#diferencia-entre-roboflow_project-y-roboflow_workflow)
+17. [Output del sistema](#output-del-sistema)
+18. [Troubleshooting](#troubleshooting)
+19. [Productos actuales en el modelo](#productos-actuales-en-el-modelo)
+20. [Versión](#versión)
 
 ---
 
-## 📁 Estructura del Proyecto
+## Qué hace el sistema
 
+1. **Recibe un video** grabado frente a una góndola de supermercado.
+2. **Extrae frames** a un FPS configurable, descartando los borrosos.
+3. **Envía cada frame a Roboflow** que detecta y clasifica productos.
+4. **Mapea cada clase** detectada a un EAN (código de barras) usando `roboflow_label_map.json`.
+5. **Genera un reporte** (`inventario_sku.csv`) con el conteo por EAN y fecha.
+6. **Genera imágenes anotadas** con bounding boxes sobre los frames originales.
+
+---
+
+## Arquitectura general
+
+```text
+Video (.MOV)
+   │
+   ▼
+analizar_video.py   →  Extrae frames (1 fps por defecto)
+   │
+   ▼
+detectar_roboflow.py →  Envía frame a Roboflow Workflows API
+   │                     Recibe: clase + bounding box + confianza
+   ▼
+roboflow_label_map.json →  Traduce clase (ej: "3") a EAN (ej: "7790895000997")
+   │
+   ▼
+inventario_sku.csv   →  EAN, Cantidad, Fecha
 ```
+
+El sistema usa **Roboflow** exclusivamente — no hay modelo local. Toda la inferencia se hace vía API serverless.
+
+---
+
+## Estructura del proyecto
+
+```text
 dinamic-carrefour/
-├── src/                              # Código fuente principal
-│   ├── main.py                       # Orquestador principal
-│   ├── analizar_video.py             # Análisis y extracción de frames
-│   ├── detectar_productos.py         # Detección YOLOv8 + crops
-│   ├── identificar_sku_retrieval.py  # Identificación SKU (retrieval)
-│   ├── reconocer_marcas.py           # OCR para marcas
-│   ├── config.py                     # Configuración centralizada
-│   │
-│   ├── protocols.py                  # Abstracciones (interfaces)
-│   ├── ocr_strategies.py             # Strategy: OCR engines
-│   ├── exporters.py                  # Strategy: Export formats
-│   ├── factory.py                    # Component Factory (DI)
-│   │
-│   └── utils/                        # Utilidades compartidas
-│       ├── __init__.py
-│       └── image_utils.py            # Procesamiento de imágenes
-│
-├── scripts/                          # Scripts utilitarios
-│   ├── buscarimagenes.py             # Descargar imágenes de catálogo
-│   ├── descargar_modelo.py           # Descargar modelo pre-entrenado
-│   ├── entrenar_modelo.py            # Entrenar modelo personalizado
-│   ├── probar_deteccion.py           # Probar detección
-│   ├── probar_identificacion_sku.py  # Probar identificación SKU
-│   ├── integrar_roboflow.py          # Integración con Roboflow
-│   ├── organizar_dataset_descargado.py
-│   └── pre_anotar_con_api.py
-│
-├── tests/                            # Tests y validación
-│   └── test_solid_improvements.py    # Tests de arquitectura SOLID
-│
-├── data/                             # Videos de entrada
-│   └── IMG_1838.MOV                  # Video de ejemplo
-│
-├── imagenes/                         # Catálogo de SKUs (generado)
-│   ├── 7790895000997/                # EAN/SKU
-│   │   ├── 7790895000997__000.jpg
-│   │   └── ...
-│   ├── metadata.jsonl                # Metadata de imágenes
-│   └── errors.jsonl                  # Errores de descarga
-│
-├── modelos/                          # Modelos ML
-│   ├── yolov8_gondola_mvp.pt         # Modelo por defecto
-│   └── yolov8n.pt                    # Modelo base
-│
-├── output/                           # Resultados del procesamiento
-│   └── [video_timestamp]/            # Carpeta por ejecución
-│       ├── analisis_video.json       # Metadatos del video
-│       ├── frames_extraidos/         # Frames extraídos
-│       ├── crops/                    # Crops de productos
-│       └── reporte_deteccion/        # Resultados
-│           ├── inventario.csv        # Reporte por clase
-│           ├── inventario_sku.csv    # Reporte por EAN
-│           ├── metadata.json         # Metadatos
-│           └── *.jpg                 # Imágenes anotadas
-│
-├── eans.txt                          # Catálogo de EANs + descripciones
-├── embeddings.pkl                    # Embeddings del catálogo (generado)
-├── requirements.txt                  # Dependencias Python
-├── run.py                            # Wrapper para ejecutar desde raíz
-└── README.md                         # Este archivo
+├── run.py                          # Punto de entrada principal
+├── .env                            # Variables de entorno (API keys, workflow)
+├── .env.example                    # Template de .env
+├── eans.txt                        # Catálogo: EAN → descripción
+├── ean_class_map.json              # Mapeo EAN → nombre de clase visual
+├── roboflow_label_map.json         # Mapeo clase Roboflow → EAN (para inferencia)
+├── requirements.txt                # Dependencias Python
+├── data/                           # Videos de entrada
+│   ├── IMG_2195.MOV
+│   ├── IMG_2196.MOV
+│   └── ...
+├── imagenes/                       # Imágenes de referencia por EAN
+│   ├── 7750496/                    # Pepsi 2.25L
+│   ├── 7791813421719/              # Pepsi 1.5L
+│   ├── 7791813423775/              # Pepsi Black 1.5L
+│   ├── 7790895000997/              # Coca-Cola 2.25L
+│   ├── 7790895000430/              # Coca-Cola 1.5L
+│   ├── 7790895001130/              # Coca-Cola Zero 1.5L
+│   └── 7790315058201/              # Villavicencio Sport 750ml
+├── src/
+│   ├── main.py                     # Orquestador del pipeline
+│   ├── analizar_video.py           # Análisis y extracción de frames
+│   ├── detectar_roboflow.py        # Detector vía Roboflow API
+│   ├── factory.py                  # Factory para inyección de dependencias
+│   ├── protocols.py                # Protocolos/interfaces (DIP)
+│   ├── exporters.py                # Exportadores de reportes
+│   └── utils/
+│       └── image_utils.py          # Utilidades de imagen
+├── scripts/
+│   ├── agregar_producto_auto.py    # Alta automática de producto nuevo
+│   ├── buscarimagenes.py           # Descarga imágenes de Bing
+│   ├── upload_to_roboflow.py       # Sube imágenes/anotaciones al dataset
+│   ├── sync_eans_to_roboflow.py    # Sincronización incremental EANs → Roboflow
+│   └── sync_roboflow_label_map.py  # Regenera roboflow_label_map.json
+├── output/                         # Resultados de cada ejecución
+│   └── VIDEO_TIMESTAMP/
+│       ├── analisis_video.json
+│       ├── frames_extraidos/
+│       └── reporte_deteccion/
+│           ├── inventario_sku.csv
+│           └── *_detectado.jpg
+└── tests/
+    └── test_solid_improvements.py
 ```
 
 ---
 
-## 🚀 Instalación
+## Requisitos previos
 
-### Requisitos Previos
+- **Python 3.8+** (probado con 3.13)
+- **Cuenta de Roboflow** con un proyecto y modelo entrenado
+- **API Key de Roboflow**
+- **Conexión a internet** (la inferencia se ejecuta en la nube)
 
-- Python 3.8+
-- pip
-- (Opcional) Tesseract OCR si prefieres usar pytesseract
+---
 
-### Pasos de Instalación
+## Instalación
 
-1. **Clonar/Descargar el proyecto**
-
-2. **Crear entorno virtual** (recomendado):
 ```bash
+# 1. Clonar el repositorio
+git clone <URL_DEL_REPO>
+cd dinamic-carrefour
+
+# 2. Crear entorno virtual
 python3 -m venv venv
-source venv/bin/activate  # En Windows: venv\Scripts\activate
-```
+source venv/bin/activate   # macOS / Linux
 
-3. **Instalar dependencias**:
-```bash
+# 3. Instalar dependencias
 pip install -r requirements.txt
+
+# 4. Configurar variables de entorno
+cp .env.example .env
 ```
 
-4. **Descargar modelo pre-entrenado** (si no existe):
-```bash
-python scripts/descargar_modelo.py
+Editá `.env` con tus datos reales (ver siguiente sección).
+
+---
+
+## Configuración
+
+### Archivo `.env`
+
+Creá un archivo `.env` en la raíz del proyecto con estas variables:
+
+```env
+ROBOFLOW_API_KEY=TU_API_KEY_AQUI
+ROBOFLOW_WORKSPACE=gondolacarrefour
+ROBOFLOW_WORKFLOW=custom-workflow-2
+ROBOFLOW_PROJECT=gondolacarrefour/gondola-dataset
 ```
 
-5. **Generar catálogo de imágenes** (primera vez):
+| Variable | Qué es | Ejemplo |
+|---|---|---|
+| `ROBOFLOW_API_KEY` | Tu API Key de Roboflow | `UvOpfuykQC2paoNWmaOa` |
+| `ROBOFLOW_WORKSPACE` | Nombre del workspace | `gondolacarrefour` |
+| `ROBOFLOW_WORKFLOW` | ID del workflow de **inferencia** | `custom-workflow-2` |
+| `ROBOFLOW_PROJECT` | Slug del **proyecto/dataset** | `gondolacarrefour/gondola-dataset` |
+
+> ⚠️ **`ROBOFLOW_WORKFLOW` y `ROBOFLOW_PROJECT` NO son lo mismo.** Ver sección [Diferencia entre ROBOFLOW_PROJECT y ROBOFLOW_WORKFLOW](#diferencia-entre-roboflow_project-y-roboflow_workflow).
+
+---
+
+## Uso principal — procesar un video
+
 ```bash
-python scripts/buscarimagenes.py --input eans.txt --out imagenes --per-ean 5
+python run.py data/IMG_2196.MOV
 ```
 
-6. **Probar identificación SKU**:
+Eso es todo. El sistema:
+
+1. Lee la API key desde `.env`
+2. Extrae frames del video a 1 fps
+3. Envía cada frame a Roboflow para detección
+4. Genera `inventario_sku.csv` con el conteo por EAN
+5. Genera imágenes anotadas con bounding boxes
+
+### Ejemplo con opciones
+
 ```bash
-python scripts/probar_identificacion_sku.py
+python run.py data/IMG_2196.MOV \
+  --fps 2.0 \
+  --confianza 0.2 \
+  --guardar-crops \
+  --label-map roboflow_label_map.json
 ```
 
 ---
 
-## 💻 Uso
+## Argumentos CLI de `run.py`
 
-### 1. Procesar Video Completo (con Identificación SKU)
+| Argumento | Tipo | Default | Descripción |
+|---|---|---|---|
+| `video` | posicional | — | Ruta al archivo de video |
+| `--roboflow-api-key` | str | `.env` | API Key (si no se define en `.env`) |
+| `--roboflow-workspace` | str | `gondolacarrefour` | Workspace de Roboflow |
+| `--roboflow-workflow` | str | `.env` | Workflow ID de inferencia |
+| `--label-map` | str | `roboflow_label_map.json` | Archivo de mapeo clase → EAN |
+| `--confianza` | float | `0.25` | Confianza mínima para filtrar detecciones |
+| `--fps` | float | `1.0` | Frames por segundo a extraer del video |
+| `--guardar-crops` | flag | `false` | Guardar recorte individual de cada detección |
+| `--sin-deteccion` | flag | `false` | Solo extraer frames, sin correr detección |
+| `--sin-anotaciones` | flag | `false` | No generar imágenes anotadas (más rápido) |
+| `--rotar` | flag | `false` | Rotar frames 90° (videos verticales) |
+| `--output` | str | `output` | Directorio base para resultados |
+
+### Ejemplo mínimo
 
 ```bash
-# Pipeline completo: detección + crops + identificación SKU
-python run.py data/IMG_1838.MOV --identificar-sku --catalogo imagenes/
+python run.py data/MI_VIDEO.MOV
 ```
 
-**Output:**
-- `inventario.csv`: Conteo por clase genérica
-- `inventario_sku.csv`: Conteo por EAN específico ✨
-- `crops/`: Imágenes individuales de cada producto
-- `*_detectado.jpg`: Imágenes anotadas con bounding boxes
-
-### 2. Solo Detección + Crops (sin identificar SKU)
+### Ejemplo completo
 
 ```bash
-# Generar crops pero sin identificar SKU
-python run.py data/IMG_1838.MOV --guardar-crops
-```
-
-### 3. Opciones Avanzadas
-
-```bash
-# Especificar modelo personalizado
-python run.py video.MOV --modelo modelos/mi_modelo.pt --identificar-sku --catalogo imagenes/
-
-# Ajustar confianza de detección (0-1)
-python run.py video.MOV --confianza 0.3 --identificar-sku --catalogo imagenes/
-
-# Ajustar threshold de SKU (0-1)
-python run.py video.MOV --identificar-sku --catalogo imagenes/ --sku-threshold 0.6
-
-# Elegir método OCR (tesseract/easyocr/dummy)
-python run.py video.MOV --ocr-metodo tesseract --identificar-sku --catalogo imagenes/
-
-# Exportar en JSON o múltiples formatos (csv/json/multi)
-python run.py video.MOV --export-formato json --identificar-sku --catalogo imagenes/
-python run.py video.MOV --export-formato multi --identificar-sku --catalogo imagenes/
-
-# Extraer más frames por segundo
-python run.py video.MOV --fps 2.0 --identificar-sku --catalogo imagenes/
-
-# Rotar frames (90/180/270 grados, para videos verticales)
-python run.py video.MOV --rotar 90 --identificar-sku --catalogo imagenes/
-
-# Filtrar frames borrosos automáticamente
-python run.py video.MOV --filtrar-borrosos --umbral-nitidez 100
-
-# Configurar formato y calidad de frames exportados
-python run.py video.MOV --formato png --calidad 95
-
-# Sin generar imágenes anotadas (más rápido)
-python run.py video.MOV --sin-anotaciones --identificar-sku --catalogo imagenes/
-
-# Desactivar reconocimiento de marcas (más rápido)
-python run.py video.MOV --sin-marcas --identificar-sku --catalogo imagenes/
-
-# Solo análisis y frames (sin detección)
-python run.py video.MOV --sin-deteccion
-```
-
-### Ver Ayuda Completa
-
-```bash
-python run.py --help
+python run.py data/IMG_2196.MOV \
+  --fps 1.0 \
+  --confianza 0.2 \
+  --guardar-crops \
+  --roboflow-workflow custom-workflow-2 \
+  --label-map roboflow_label_map.json \
+  --output output
 ```
 
 ---
 
-## ⚙️ Configuración
+## Catálogo de productos (`eans.txt`)
 
-### Archivo de Configuración
+Archivo de texto que define los productos conocidos. Formato: `EAN<TAB>DESCRIPCION`, una línea por producto.
 
-La configuración principal está en `src/config.py`:
-
-- **MODELO_DEFAULT**: Ruta al modelo por defecto
-- **CONFIANZA_MINIMA_DEFAULT**: Umbral de confianza (0.25)
-- **FPS_EXTRACCION_DEFAULT**: Frames por segundo a extraer (1.0)
-
-### Catálogo de EANs
-
-Edita `eans.txt` con tus productos (formato: `EAN<TAB>DESCRIPCIÓN`):
-
-```
+```text
+7750496	GASEOSA COLA REGULAR PEPSI PET X 2.25 LT
+7791813421719	GASEOSA COLA REGULAR PEPSI PET X 1.5 LT
+7791813423775	GASEOSA PEPSI BLACK PET X 1.5 LT
 7790895000997	GASEOSA COLA REGULAR COCA COLA PET X 2.25 LT
 7790895000430	GASEOSA COLA REGULAR COCA COLA PET X 1.5 LT
+7790895001130	GASEOSA COCA COLA ZERO PET X 1.5 LT
+7790315058201	AGUA MINERAL VILLAVICENCIO SPORT PET X 750 ML
 ```
 
-### Generar Catálogo de Imágenes
-
-```bash
-# Descargar imágenes de referencia por EAN
-python scripts/buscarimagenes.py --input eans.txt --out imagenes --per-ean 10
-
-# Opciones:
-#   --per-ean: Cantidad de imágenes por EAN (default: 10)
-#   --shuffle-candidates: Mezclar para mayor diversidad
-#   --dedupe-global: Evitar duplicados entre EANs
-```
+**Regla**: un EAN por cada producto visualmente distinto. Si dos productos se ven diferente, necesitan EANs separados.
 
 ---
 
-## 🏗️ Arquitectura SOLID y Extensibilidad
+## Archivos de mapeo
 
-### Dependency Injection
+El sistema usa dos archivos JSON que se generan automáticamente:
 
-El sistema usa **Dependency Injection** para facilitar testing y extensibilidad:
+### `ean_class_map.json`
 
-```python
-from src.factory import ComponentFactory
-
-# Crear componentes desde CLI args
-factory = ComponentFactory.from_cli_args(args)
-detector = factory.create_detector()
-identificador_sku = factory.create_sku_identifier()
-
-# O desde configuración personalizada
-config = {
-    'ocr_metodo': 'tesseract',
-    'export_formato': 'json',
-    'confianza_minima': 0.3
-}
-factory = ComponentFactory.desde_config(config)
-```
-
-### Strategy Pattern: OCR
-
-Intercambia engines OCR sin modificar código:
-
-```python
-from src.ocr_strategies import TesseractOCRStrategy, EasyOCRStrategy
-from src.reconocer_marcas import ReconocedorMarcas
-
-# Usar Tesseract
-ocr = TesseractOCRStrategy()
-reconocedor = ReconocedorMarcas(ocr_strategy=ocr)
-
-# Cambiar a EasyOCR
-ocr = EasyOCRStrategy()
-reconocedor = ReconocedorMarcas(ocr_strategy=ocr)
-```
-
-### Strategy Pattern: Exporters
-
-Exporta reportes en diferentes formatos:
-
-```python
-from src.exporters import CSVExporter, JSONExporter, MultiFormatExporter
-
-# Solo CSV
-exporter = CSVExporter()
-exporter.export_data(data, 'inventario.csv')
-
-# Solo JSON
-exporter = JSONExporter()
-exporter.export_data(data, 'inventario.json')
-
-# Ambos formatos
-exporter = MultiFormatExporter()
-exporter.export_data(data, 'inventario')  # → .csv y .json
-```
-
-### Testing con Mocks
-
-```python
-from src.ocr_strategies import DummyOCRStrategy
-from src.reconocer_marcas import ReconocedorMarcas
-
-# Mock OCR para tests sin dependencias externas
-mock_ocr = DummyOCRStrategy()
-reconocedor = ReconocedorMarcas(ocr_strategy=mock_ocr)
-
-# Tests rápidos sin instalar Tesseract/EasyOCR
-resultado = reconocedor.procesar_detecciones('test.jpg', detecciones)
-```
-
----
-
-## 📊 Formato de Salida
-
-### CSV de Inventario SKU (`inventario_sku.csv`)
-
-```csv
-EAN,Cantidad,Fecha
-7790895000997,4,2026-01-27 15:30:22
-7790895000430,2,2026-01-27 15:30:22
-UNKNOWN,3,2026-01-27 15:30:22
-```
-
-### CSV de Inventario por Clase (`inventario.csv`)
-
-```csv
-Producto/Marca,Cantidad Detectada,Fecha
-bottle_Susante,4,2026-01-27 15:30:22
-bottle_Levite,2,2026-01-27 15:30:22
-bottle,3,2026-01-27 15:30:22
-```
-
-### JSON de Metadatos (`metadata.json`)
+Mapea cada EAN a un nombre de clase visual para Roboflow:
 
 ```json
 {
-  "fecha": "2026-01-27T15:30:22",
-  "total_frames": 7,
-  "total_skus": 3,
-  "total_productos": 9,
-  "sku_identificados": 6,
-  "conteo": {
-    "7790895000997": 4,
-    "7790895000430": 2,
-    "UNKNOWN": 3
-  }
+  "7750496": "pepsi_225",
+  "7791813421719": "pepsi_15",
+  "7791813423775": "pepsi_black_15",
+  "7790895000997": "cocacola_225",
+  "7790895000430": "cocacola_15",
+  "7790895001130": "cocacola_zero_15",
+  "7790315058201": "ean_7790315058201"
 }
 ```
 
----
+### `roboflow_label_map.json`
 
-## 🎯 Identificación SKU - Cómo Funciona
+Mapea las clases que devuelve el modelo (numéricas: `"0"`, `"1"`, ...) al EAN y descripción correspondiente:
 
-### Retrieval Visual
+```json
+{
+  "0": { "ean": "7750496", "descripcion": "GASEOSA COLA REGULAR PEPSI PET X 2.25 LT" },
+  "1": { "ean": "7791813421719", "descripcion": "GASEOSA COLA REGULAR PEPSI PET X 1.5 LT" },
+  "2": { "ean": "7791813423775", "descripcion": "GASEOSA PEPSI BLACK PET X 1.5 LT" },
+  "3": { "ean": "7790895000997", "descripcion": "GASEOSA COLA REGULAR COCA COLA PET X 2.25 LT" },
+  "4": { "ean": "7790895000430", "descripcion": "GASEOSA COLA REGULAR COCA COLA PET X 1.5 LT" },
+  "5": { "ean": "7790895001130", "descripcion": "GASEOSA COCA COLA ZERO PET X 1.5 LT" },
+  "6": { "ean": null, "descripcion": "Botella genérica (sin EAN asignado)" },
+  "7": { "ean": "7790315058201", "descripcion": "AGUA MINERAL VILLAVICENCIO SPORT PET X 750 ML" }
+}
+```
 
-El sistema usa **retrieval visual** para identificar SKUs:
+> Las clases `"6"` que tengan `ean: null` aparecen como `SIN_EAN_6` en el inventario.
 
-1. **Generación de embeddings del catálogo** (una vez):
-   - Extrae features de cada imagen del catálogo usando ResNet50
-   - Guarda embeddings en `embeddings.pkl`
-   - ~10 segundos para 100 imágenes
-
-2. **Identificación de crops**:
-   - Extrae features del crop detectado
-   - Compara con embeddings del catálogo (cosine similarity)
-   - Retorna EAN con mayor similitud (si > threshold)
-
-### Ventajas del Retrieval Visual
-
-- ✅ No requiere reentrenar modelos
-- ✅ Agregar SKU = agregar imágenes al catálogo
-- ✅ Funciona con variaciones de iluminación/ángulo
-- ✅ Agrupa automáticamente EANs visualment similares
-- ✅ Threshold configurable para precisión/recall
-
-### Probar el Sistema
+Ambos archivos se regeneran automáticamente con:
 
 ```bash
-# Ver estadísticas del catálogo y hacer pruebas
-python scripts/probar_identificacion_sku.py
-```
-
-**Output ejemplo:**
-```
-📊 ESTADÍSTICAS DEL CATÁLOGO:
-   Total de SKUs (EANs): 21
-   Total de imágenes: 106
-   Promedio por SKU: 5.0
-
-🔍 PRUEBA DE AUTO-IDENTIFICACIÓN:
-✅ Test 1/5: EAN predicho correctamente (0.987)
-✅ Test 2/5: EAN predicho correctamente (0.923)
-...
-
-📈 RESULTADOS:
-   Correctos: 5/5
-   Precisión: 100.0%
+python scripts/sync_roboflow_label_map.py --write
 ```
 
 ---
 
-## 🎯 Modelos y Entrenamiento
+## Agregar un producto nuevo (flujo completo)
 
-### Modelo Actual
+### Opción A — Script automático (recomendado)
 
-El sistema usa un modelo **pre-entrenado genérico** (YOLOv8n COCO) que detecta objetos comunes:
-- `bottle`, `cup`, `bowl`, etc.
-
-**Limitación**: No detecta productos específicos de góndola.
-
-### Entrenar Modelo Personalizado
-
-#### Opción 1: Usar Roboflow (⭐ Recomendado)
-
-1. **Crear cuenta** en https://roboflow.com
-2. **Subir imágenes** de tus videos
-3. **Anotar productos** en la interfaz web
-4. **Exportar dataset** en formato YOLOv8
-5. **Entrenar**:
-   ```bash
-   python scripts/entrenar_modelo.py --dataset datos/dataset.yaml --epochs 100
-   ```
-
-#### Opción 2: Entrenamiento Manual
+Un solo comando que hace todo:
 
 ```bash
-# 1. Preparar dataset (imágenes + anotaciones YOLO)
-# 2. Crear configuración
-python scripts/entrenar_modelo.py --crear-config datos/ --clases botella bidon
+python scripts/agregar_producto_auto.py \
+  --ean 7790315058201 \
+  --descripcion "AGUA MINERAL VILLAVICENCIO SPORT PET X 750 ML"
+```
 
-# 3. Entrenar
-python scripts/entrenar_modelo.py --dataset datos/dataset.yaml --epochs 100
+Esto ejecuta:
 
-# 4. Usar modelo entrenado
-python run.py video.MOV --modelo modelos/gondola_training/weights/best.pt
+1. Agrega el EAN a `eans.txt` (si no existe)
+2. Descarga imágenes de referencia desde Bing
+3. Sube las imágenes al dataset de Roboflow con anotaciones
+4. Actualiza `roboflow_label_map.json`
+
+Si además querés subir pre-anotaciones desde un video:
+
+```bash
+python scripts/agregar_producto_auto.py \
+  --ean 7790315058201 \
+  --descripcion "AGUA MINERAL VILLAVICENCIO SPORT PET X 750 ML" \
+  --video data/IMG_2197.MOV
+```
+
+### Opción B — Paso a paso manual
+
+```bash
+# 1. Agregar línea a eans.txt (manualmente o con el script)
+echo "7790315058201\tAGUA MINERAL VILLAVICENCIO SPORT PET X 750 ML" >> eans.txt
+
+# 2. Sincronizar nuevos EANs al dataset Roboflow
+python scripts/sync_eans_to_roboflow.py --per-ean 8
+
+# 3. Regenerar el label map local
+python scripts/sync_roboflow_label_map.py --write
+
+# 4. En Roboflow: revisar anotaciones → generar nueva versión → reentrenar
+# 5. Probar inferencia
+python run.py data/MI_VIDEO.MOV --confianza 0.2
+```
+
+### Opción C — Sincronización incremental
+
+Si agregaste varios EANs a `eans.txt` de una vez:
+
+```bash
+python scripts/sync_eans_to_roboflow.py --per-ean 8
+```
+
+Este comando detecta automáticamente los EANs nuevos comparando `eans.txt` con el estado guardado en `scripts/.eans_sync_state.json`.
+
+Para ver qué haría sin ejecutar nada:
+
+```bash
+python scripts/sync_eans_to_roboflow.py --dry-run
 ```
 
 ---
 
-## 🧪 Testing y Validación
+## Subir imágenes a Roboflow
 
-### Probar Arquitectura SOLID
+El script `scripts/upload_to_roboflow.py` soporta tres modos:
 
-```bash
-python tests/test_solid_improvements.py
-```
-
-**Output esperado:**
-```
-✅ Test 1/4: Imports y sintaxis correctos
-✅ Test 2/4: ComponentFactory funcional
-✅ Test 3/4: Dependency Injection operativa
-✅ Test 4/4: Exportadores validados
-
-🎉 TODOS LOS TESTS PASARON (4/4)
-```
-
-### Probar Detección
+### Modo catálogo — subir imágenes de referencia
 
 ```bash
-python scripts/probar_deteccion.py
+python scripts/upload_to_roboflow.py \
+  --modo catalogo \
+  --proyecto gondolacarrefour/gondola-dataset \
+  --solo-eans 7790895000997,7790895000430
 ```
 
-### Probar Identificación SKU
+Sube las imágenes de `imagenes/<EAN>/` con anotaciones full-frame automáticas.
+
+### Modo frames — pre-anotar desde video
 
 ```bash
-python scripts/probar_identificacion_sku.py
+python scripts/upload_to_roboflow.py \
+  --modo frames \
+  --video data/IMG_2196.MOV \
+  --proyecto gondolacarrefour/gondola-dataset \
+  --fps 1.0 \
+  --confianza 0.2
 ```
 
-### Verificar Catálogo
+Extrae frames del video, corre inferencia con el modelo actual, y sube frames + predicciones como pre-anotaciones para revisión en Roboflow.
+
+### Modo imágenes — subir desde reportes existentes
 
 ```bash
-# Ver imágenes descargadas
-ls -la imagenes/*/
+python scripts/upload_to_roboflow.py \
+  --modo imagenes \
+  --proyecto gondolacarrefour/gondola-dataset \
+  --imagenes-dir output
+```
 
-# Ver metadata
-cat imagenes/metadata.jsonl | head -5
+Sube imágenes de `output/*/reporte_deteccion` con las detecciones ya hechas como pre-anotaciones.
 
-# Ver errores (si hubo)
-cat imagenes/errors.jsonl | grep "error"
+> **Nota**: Roboflow deduplica imágenes por **contenido** (hash). Si subís la misma imagen dos veces, no se crea un duplicado aunque el nombre sea distinto.
+
+---
+
+## Sincronizar label map
+
+Cuando cambian las clases en el modelo (por ejemplo, después de reentrenar con nuevos productos):
+
+```bash
+# Ver preview de los cambios
+python scripts/sync_roboflow_label_map.py
+
+# Escribir los cambios
+python scripts/sync_roboflow_label_map.py --write
+```
+
+Esto regenera `roboflow_label_map.json` a partir de `eans.txt` y `ean_class_map.json`.
+
+---
+
+## Reentrenar el modelo en Roboflow
+
+Después de subir imágenes nuevas:
+
+1. Ir a [https://app.roboflow.com/gondolacarrefour](https://app.roboflow.com/gondolacarrefour)
+2. Entrar al proyecto `gondola-dataset`
+3. En **Annotate**: revisar y corregir anotaciones de las imágenes nuevas
+4. En **Generate**: crear una nueva versión del dataset
+5. En **Train**: lanzar entrenamiento (o usar Roboflow Train)
+6. Una vez entrenado, **publicar el workflow** actualizado
+7. Probar localmente:
+
+```bash
+python run.py data/IMG_2196.MOV --confianza 0.2
 ```
 
 ---
 
-## 📝 Casos de Uso
+## Confianza del modelo
 
-### Caso 1: Inventario Rápido (sin SKU)
+La **confianza** (`--confianza`) es un valor entre 0 y 1 que filtra las detecciones del modelo.
 
-```bash
-# Solo detección y conteo genérico
-python run.py video.MOV --sin-marcas
+| Valor | Efecto |
+|---|---|
+| `0.5` - `1.0` | Solo detecciones muy seguras. Puede perder productos reales (falsos negativos). |
+| `0.2` - `0.4` | Balance entre precisión y cobertura. **Recomendado para producción.** |
+| `0.05` - `0.2` | Detecta más productos, pero puede incluir falsos positivos. |
+
+### Valor actual recomendado: `0.2`
+
+Usamos `--confianza 0.2` porque el modelo todavía está en fase de entrenamiento y con un threshold bajo captura más detecciones reales.
+
+**Importante**: la confianza también se configura **dentro del workflow de Roboflow**. Si en el workflow el nodo "Object Detection Model" tiene un `Confidence` alto (ej: 0.4), las predicciones que estén por debajo de ese umbral **nunca llegan** al programa, sin importar qué valor pongas en `--confianza`. Asegurate de que el threshold en el workflow sea **igual o menor** que el que usás en `--confianza`.
+
+Para configurar en Roboflow:
+
+1. Ir a **Workflows** → seleccionar tu workflow
+2. Click en el nodo **"Object Detection Model"**
+3. Bajar **Confidence** a `0.2` (o al valor deseado)
+4. **Publicar** el workflow (botón "Deploy" o "Publish")
+
+---
+
+## Diferencia entre ROBOFLOW_PROJECT y ROBOFLOW_WORKFLOW
+
+Estos dos valores se confunden frecuentemente pero son **cosas distintas**:
+
+| | `ROBOFLOW_PROJECT` | `ROBOFLOW_WORKFLOW` |
+|---|---|---|
+| **Qué es** | El dataset/proyecto donde se guardan imágenes y anotaciones | El pipeline de inferencia que procesa imágenes |
+| **Para qué se usa** | Subir imágenes (`upload_to_roboflow.py`) | Correr detecciones (`run.py`) |
+| **Formato** | `workspace/project-slug` | Solo el `workflow_id` |
+| **Ejemplo** | `gondolacarrefour/gondola-dataset` | `custom-workflow-2` |
+| **Dónde se encuentra** | URL del proyecto en Roboflow | Roboflow → Workflows → nombre del workflow en la URL |
+
+### Cómo encontrar tu `workflow_id`
+
+1. Ir a [https://app.roboflow.com](https://app.roboflow.com)
+2. Ir a **Workflows** (menú lateral)
+3. Abrir tu workflow
+4. En la URL del navegador verás algo como: `https://app.roboflow.com/gondolacarrefour/workflows/custom-workflow-2`
+5. El `workflow_id` es la última parte: **`custom-workflow-2`**
+
+### Error común: HTTP 404 en inferencia
+
+Si ves este error:
+
+```
+Error HTTP 404: 404 Client Error: Not Found for url:
+https://serverless.roboflow.com/infer/workflows/gondolacarrefour/gondola-dataset
 ```
 
-### Caso 2: Inventario con Identificación SKU
+Significa que `ROBOFLOW_WORKFLOW` tiene el valor del **proyecto** en vez del **workflow**. Corregí `.env`:
 
-```bash
-# Identificación completa por EAN
-python run.py video.MOV --identificar-sku --catalogo imagenes/
-```
+```env
+# ❌ Incorrecto
+ROBOFLOW_WORKFLOW=gondola-dataset
 
-### Caso 3: Generar Dataset para Entrenamiento
-
-```bash
-# Generar crops para etiquetar manualmente
-python run.py video.MOV --guardar-crops --sin-marcas
-```
-
-### Caso 4: Agregar Nuevos SKUs al Catálogo
-
-```bash
-# 1. Agregar EAN a eans.txt
-echo "7790895999999\tPRODUCTO NUEVO X 1L" >> eans.txt
-
-# 2. Descargar imágenes
-python buscarimagenes.py --input eans.txt --out imagenes --per-ean 10
-
-# 3. Regenerar embeddings
-rm embeddings.pkl
-python scripts/probar_identificacion_sku.py
+# ✅ Correcto
+ROBOFLOW_WORKFLOW=custom-workflow-2
 ```
 
 ---
 
-## 📚 Referencias
+## Output del sistema
 
-- **YOLOv8**: https://github.com/ultralytics/ultralytics
-- **EasyOCR**: https://github.com/JaidedAI/EasyOCR
-- **PyTorch**: https://pytorch.org/
-- **OpenCV**: https://opencv.org/
-- **Roboflow**: https://roboflow.com/
+Cada ejecución crea una carpeta en `output/` con esta estructura:
 
----
-
-## 🐛 Troubleshooting
-
-### Error: "PyTorch no disponible"
-
-```bash
-pip install torch torchvision
+```text
+output/IMG_2196_20260218_215836/
+├── analisis_video.json              # Metadata del video (fps, resolución, duración)
+├── frames_extraidos/                # Frames crudos extraídos
+│   ├── frame_0001_t0.00s.jpg
+│   ├── frame_0002_t1.00s.jpg
+│   └── ...
+├── crops/                           # (si --guardar-crops) Recorte por detección
+└── reporte_deteccion/
+    ├── inventario_sku.csv           # Conteo final por EAN
+    ├── frame_0001_t0.00s_detectado.jpg   # Frame con bounding boxes dibujados
+    └── ...
 ```
 
-### Error: "Catálogo no encontrado"
+### Formato de `inventario_sku.csv`
 
-```bash
-# Generar catálogo primero
-python buscarimagenes.py --input eans.txt --out imagenes --per-ean 5
+```csv
+EAN,Cantidad,Fecha
+7790895000430,10,2026-02-18 21:59:08
+7790895000997,5,2026-02-18 21:59:08
+7790895001130,58,2026-02-18 21:59:08
+SIN_EAN_6,20,2026-02-18 21:59:08
 ```
 
-### Error: "Modelo no encontrado"
+- **EAN**: Código del producto (o `SIN_EAN_X` si la clase no tiene EAN asignado)
+- **Cantidad**: Número de veces que se detectó en todos los frames
+- **Fecha**: Timestamp de la ejecución
 
-```bash
-# Descargar modelo pre-entrenado
-python scripts/descargar_modelo.py
+---
+
+## Troubleshooting
+
+### `Falta API key`
+
+Definila en `.env`:
+
+```env
+ROBOFLOW_API_KEY=TU_API_KEY
 ```
 
-### Baja Precisión en Identificación SKU
+O pasala por CLI:
 
-1. Verificar calidad de imágenes del catálogo
-2. Aumentar cantidad de imágenes por SKU (10-15 recomendado)
-3. Ajustar threshold: `threshold=0.4` (menos estricto)
-4. Verificar que los EANs en `eans.txt` coincidan con carpetas en `imagenes/`
+```bash
+python run.py data/VIDEO.MOV --roboflow-api-key TU_API_KEY
+```
 
-### Rendimiento Lento
+### HTTP 404 en inferencia
 
-- Usar `--sin-anotaciones` para no generar imágenes
-- Usar `--sin-marcas` para desactivar OCR
-- Reducir FPS de extracción: `--fps 0.5`
-- Los embeddings se calculan una sola vez y se cachean
+Ver sección [Diferencia entre ROBOFLOW_PROJECT y ROBOFLOW_WORKFLOW](#diferencia-entre-roboflow_project-y-roboflow_workflow).
+
+### 0 detecciones (el modelo no detecta nada)
+
+Causas posibles:
+
+1. **Confidence muy alto en el workflow de Roboflow**: bajalo a 0.2 desde la UI de Workflows y republicá.
+2. **Modelo no entrenado** con los productos del video.
+3. **Workflow no publicado**: después de cambiar parámetros, hacé click en "Deploy/Publish".
+
+### `SIN_EAN_X` en el inventario
+
+Significa que el modelo detectó una clase (ej: `6`) que no tiene EAN asignado en `roboflow_label_map.json`.
+
+Solución:
+
+```bash
+python scripts/sync_roboflow_label_map.py --write
+```
+
+Si la clase es nueva (agregaste un producto), primero hay que:
+
+1. Agregar el EAN a `eans.txt`
+2. Correr `python scripts/sync_eans_to_roboflow.py`
+3. Reentrenar el modelo en Roboflow
+
+### `Endpoint not found` al subir dataset
+
+Los scripts ya normalizan automáticamente el slug del proyecto. Si persiste, verificá que el nombre del proyecto en Roboflow coincida con `ROBOFLOW_PROJECT` en `.env`.
+
+### Imágenes no se agregan a Roboflow (duplicados)
+
+Roboflow deduplica imágenes por **contenido** (hash del archivo). Si subís la misma imagen con distinto nombre, Roboflow la detecta como duplicada y no la agrega.
+
+Para agregar variantes nuevas, podés:
+
+- Usar imágenes de referencia diferentes
+- Generar variantes augmentadas (brillo, contraste, blur) que tengan contenido distinto
+
+### `ModuleNotFoundError: No module named 'cv2'`
+
+```bash
+source venv/bin/activate
+pip install opencv-python
+```
 
 ---
 
-## 👥 Soporte
+## Productos actuales en el modelo
 
-Para preguntas o problemas:
-1. Revisar este README
-2. Ejecutar scripts de prueba
-3. Verificar logs en consola
-4. Revisar archivos de salida en `output/`
+| Clase | EAN | Producto |
+|---|---|---|
+| 0 | 7750496 | Pepsi Regular 2.25L |
+| 1 | 7791813421719 | Pepsi Regular 1.5L |
+| 2 | 7791813423775 | Pepsi Black 1.5L |
+| 3 | 7790895000997 | Coca-Cola Regular 2.25L |
+| 4 | 7790895000430 | Coca-Cola Regular 1.5L |
+| 5 | 7790895001130 | Coca-Cola Zero 1.5L |
+| 6 | — | Botella genérica (sin EAN) |
+| 7 | 7790315058201 | Villavicencio Sport 750ml |
 
 ---
 
-## 📄 Licencia
+## Versión
 
-MVP desarrollado para Carrefour - Uso interno
-
----
-
-**Última actualización**: Enero 2026  
-**Versión**: 2.0 (Enterprise-Ready con SOLID Architecture)
+- **Versión**: 5.0 (Roboflow Only)
+- **Última actualización**: Febrero 2026
+- **Confianza recomendada**: `0.2`
+- **Workflow activo**: `custom-workflow-2`

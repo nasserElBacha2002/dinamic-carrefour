@@ -1,37 +1,16 @@
-# Dependencias para Sistema de Inventario de Góndolas MVP
+# Dependencias para Sistema de Inventario de Góndolas (Roboflow Only)
 
-# Visión artificial y procesamiento de imágenes
+# Procesamiento de imágenes y video
 opencv-python>=4.8.0
-ultralytics>=8.0.0  # YOLOv8
 
-# OCR para reconocimiento de marcas
-easyocr>=1.7.0  # OCR más fácil de usar
-pytesseract>=0.3.10  # Alternativa (requiere Tesseract instalado)
-
-# Machine Learning para identificación SKU (retrieval visual)
-torch>=2.0.0
-torchvision>=0.15.0
-scikit-learn>=1.3.0
-Pillow>=10.0.0
+# HTTP para comunicación con Roboflow API
+requests>=2.31.0
 
 # Web scraping para descarga de imágenes (buscarimagenes.py)
-requests>=2.31.0
 beautifulsoup4>=4.12.0
 
 # Barra de progreso para CLI
 tqdm>=4.66.0
 
-# Opcional: Integración con Roboflow (para gestión de datasets)
-roboflow>=1.1.0
-
-# Utilidades estándar (generalmente ya incluidas en Python)
-# pathlib - incluido en Python 3.4+
-# json - incluido en Python estándar
-# csv - incluido en Python estándar
-# datetime - incluido en Python estándar
-# pickle - incluido en Python estándar
-
-# Opcional: Para análisis de datos (futuro)
-# pandas>=2.0.0
-# numpy>=1.24.0
-
+# Utilidades de imagen
+Pillow>=10.0.0

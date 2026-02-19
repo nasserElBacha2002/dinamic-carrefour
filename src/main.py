@@ -31,6 +31,24 @@ except ImportError:
     IdentificadorSKUProtocol = None
 
 
+def _load_dotenv(dotenv_path: Path) -> None:
+    """
+    Carga variables de .env de forma simple (sin dependencias externas).
+    """
+    if not dotenv_path.exists():
+        return
+
+    for raw in dotenv_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 class SistemaInventarioGondola:
     """
     Sistema principal para procesamiento completo de videos de góndolas
@@ -45,7 +63,7 @@ class SistemaInventarioGondola:
         self,
         detector: object = None,  # DetectorProtocol
         identificador_sku: object = None,  # IdentificadorSKUProtocol
-        sku_threshold: float = 0.5
+        sku_threshold: float = 0.80
     ):
         """
         Inicializa el sistema con inyección de dependencias
@@ -83,7 +101,7 @@ class SistemaInventarioGondola:
         print("=" * 70)
         print(f"📅 Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"📹 Video: {video_path}")
-        if self.identificar_sku:
+        if self.identificador_sku:
             print("🔍 Identificación SKU: ACTIVADA")
         print("=" * 70)
         
@@ -298,72 +316,58 @@ class SistemaInventarioGondola:
 
 
 def main():
-    """Función principal con interfaz de línea de comandos"""
+    """Función principal con interfaz de línea de comandos (Roboflow-only)."""
+    _load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
     parser = argparse.ArgumentParser(
-        description='Sistema de Inventario de Góndolas - MVP (Pipeline Completo)',
+        description='Sistema de Inventario de Góndolas - Roboflow Only',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Ejemplos de uso:
 
-  # Procesar video completo (análisis + frames + detección + reporte)
+  # Pipeline completo con Roboflow (API key desde .env)
   python3 main.py video.MOV
+
+  # Con mapeo de labels a EANs
+  python3 main.py video.MOV --label-map roboflow_label_map.json
 
   # Solo análisis y frames (sin detección)
   python3 main.py video.MOV --sin-deteccion
 
-  # Especificar modelo personalizado
-  python3 main.py video.MOV --modelo modelos/mi_modelo.pt
-
-  # Ajustar confianza de detección
-  python3 main.py video.MOV --confianza 0.3
-
-  # Extraer más frames por segundo
-  python3 main.py video.MOV --fps 2.0
-
-  # Rotar frames (para videos verticales)
-  python3 main.py video.MOV --rotar
-
-  # Sin generar imágenes anotadas (más rápido)
-  python3 main.py video.MOV --sin-anotaciones
+  # Guardar crops de cada detección
+  python3 main.py video.MOV --guardar-crops
         """
     )
     
     # Argumentos principales
     parser.add_argument('video', help='Ruta al archivo de video')
     
-    # Opciones de modelo y detección
-    parser.add_argument('--modelo', default=None,
-                       help='Ruta al modelo YOLOv8 (.pt). Si no se especifica, usa modelo por defecto')
+    # Roboflow (obligatorio)
+    parser.add_argument('--roboflow-api-key', default=os.getenv('ROBOFLOW_API_KEY'),
+                       help='API Key de Roboflow (si no se pasa, usa ROBOFLOW_API_KEY de .env)')
+    parser.add_argument('--roboflow-workspace', default=os.getenv('ROBOFLOW_WORKSPACE', 'gondolacarrefour'),
+                       help='Workspace de Roboflow (default: gondolacarrefour)')
+    parser.add_argument('--roboflow-workflow',
+                       default=os.getenv('ROBOFLOW_WORKFLOW', 'find-bottles-pepsis-pepsi-1s-pepsi-blacks-and-5-lts'),
+                       help='Workflow ID de Roboflow')
+    parser.add_argument('--label-map', default='roboflow_label_map.json',
+                       help='Archivo JSON con mapeo label → EAN (default: roboflow_label_map.json)')
+
+    # Detección / extracción
     parser.add_argument('--confianza', type=float, default=None,
                        help='Confianza mínima para detecciones (0-1, default: 0.25)')
     parser.add_argument('--sin-deteccion', action='store_true',
                        help='Omitir detección de productos (solo análisis y frames)')
     parser.add_argument('--sin-anotaciones', action='store_true',
                        help='No generar imágenes anotadas (más rápido)')
-    parser.add_argument('--sin-marcas', action='store_true',
-                       help='Desactivar reconocimiento de marcas (más rápido)')
-    parser.add_argument('--ocr-metodo', default='easyocr', choices=['easyocr', 'tesseract', 'dummy'],
-                       help='Método OCR para reconocimiento de marcas (default: easyocr)')
-    parser.add_argument('--export-formato', default='csv', choices=['csv', 'json', 'multi'],
-                       help='Formato de exportación de reportes (default: csv)')
-    
-    # Opciones de identificación SKU
-    parser.add_argument('--catalogo', default=None,
-                       help='Directorio con catálogo de imágenes para identificación SKU (EAN/imagen.jpg)')
-    parser.add_argument('--identificar-sku', action='store_true',
-                       help='Activar identificación de SKU/EAN usando retrieval visual')
-    parser.add_argument('--sku-threshold', type=float, default=0.5,
-                       help='Umbral de similitud para identificación SKU (0-1, default: 0.5)')
     parser.add_argument('--guardar-crops', action='store_true',
-                       help='Guardar crops de cada detección (se activa automáticamente con --identificar-sku)')
-    
-    # Opciones de extracción de frames
+                       help='Guardar crops de cada detección')
     parser.add_argument('--fps', type=float, default=1.0,
                        help='Frames por segundo a extraer (default: 1.0)')
     parser.add_argument('--rotar', action='store_true',
                        help='Rotar frames 90° (para videos verticales)')
     
-    # Opciones de salida
+    # Salida
     parser.add_argument('--output', default='output',
                        help='Directorio base para outputs (default: output)')
     
@@ -374,28 +378,27 @@ Ejemplos de uso:
         print(f"❌ Error: No se encuentra el video {args.video}")
         sys.exit(1)
     
-    # Crear componentes usando Factory (Dependency Inversion Principle)
-    print("\n🔧 Configurando componentes del sistema...")
-    
-    # Configuración para factory
+    if not args.roboflow_api_key:
+        print("❌ Falta API key. Definila en .env como ROBOFLOW_API_KEY o pasá --roboflow-api-key")
+        sys.exit(1)
+
+    # Crear componentes usando Factory (solo Roboflow)
+    print("\n🔧 Configurando componentes del sistema (Roboflow)...")
+
     config = {
-        'modelo_path': args.modelo,
+        'detector_tipo': 'roboflow',
         'confianza_minima': args.confianza,
-        'reconocer_marcas': not args.sin_marcas,
-        'ocr_metodo': args.ocr_metodo,
-        'export_formato': args.export_formato,
-        'identificar_sku': args.identificar_sku,
-        'catalogo_imagenes': args.catalogo
+        'roboflow_api_key': args.roboflow_api_key,
+        'roboflow_workspace': args.roboflow_workspace,
+        'roboflow_workflow': args.roboflow_workflow,
+        'label_map_path': args.label_map,
     }
-    
-    # Crear componentes con dependencias inyectadas
+
     componentes = ComponentFactory.desde_config(config)
-    
-    # Crear sistema con dependencias inyectadas
+
     sistema = SistemaInventarioGondola(
         detector=componentes['detector'],
-        identificador_sku=componentes['identificador_sku'],
-        sku_threshold=args.sku_threshold
+        identificador_sku=None
     )
     
     # Ejecutar procesamiento
@@ -407,7 +410,7 @@ Ejemplos de uso:
             rotar_frames=args.rotar,
             detectar=not args.sin_deteccion,
             generar_anotaciones=not args.sin_anotaciones,
-            guardar_crops=args.guardar_crops or args.identificar_sku
+            guardar_crops=args.guardar_crops
         )
         
         if resultados:

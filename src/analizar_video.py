@@ -217,10 +217,10 @@ def exportar_frames(
     with tqdm(total=frame_count, desc="Extrayendo", unit="frame") as pbar:
         while True:
             ret, frame = cap.read()
-            
+
             if not ret:
                 break
-            
+
             # Extraer frame si corresponde al intervalo
             if frame_num % frame_interval == 0:
                 # Rotar si es necesario
@@ -230,7 +230,7 @@ def exportar_frames(
                     frame = cv2.rotate(frame, cv2.ROTATE_180)
                 elif rotar == 270:
                     frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-                
+
                 # Filtrar frames borrosos si está activado
                 if filtrar_borrosos:
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -240,27 +240,27 @@ def exportar_frames(
                         frame_num += 1
                         pbar.update(1)
                         continue
-                
+
                 # Calcular timestamp
                 timestamp = frame_num / fps_video if fps_video > 0 else 0
-                
+
                 # Nombre del archivo
                 nombre_frame = f"frame_{frames_guardados:04d}_t{timestamp:.2f}s.{formato}"
                 ruta_completa = os.path.join(output_dir, nombre_frame)
-                
+
                 # Guardar frame con formato y calidad especificados
-                if formato.lower() == 'jpg' or formato.lower() == 'jpeg':
+                if formato.lower() in ("jpg", "jpeg"):
                     cv2.imwrite(ruta_completa, frame, [cv2.IMWRITE_JPEG_QUALITY, calidad])
-                elif formato.lower() == 'png':
+                elif formato.lower() == "png":
                     # PNG: calidad invertida (0=mejor, 9=peor compresión)
                     compresion = int((100 - calidad) / 10)
                     cv2.imwrite(ruta_completa, frame, [cv2.IMWRITE_PNG_COMPRESSION, compresion])
                 else:
                     cv2.imwrite(ruta_completa, frame)
-                
+
                 frames_exportados.append(ruta_completa)
                 frames_guardados += 1
-            
+
             frame_num += 1
             pbar.update(1)
     

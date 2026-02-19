@@ -28,15 +28,15 @@ class ReconocedorMarcas:
     
     def __init__(self, ocr_strategy: Optional[OCRStrategyBase] = None):
         """
-        Inicializa el reconocedor de marcas con inyección de dependencia
+        Inicializa el reconocedor de marcas con inyección de dependencia.
         
         Args:
-            ocr_strategy: Estrategia de OCR a usar (si None, usa default)
+            ocr_strategy: Estrategia de OCR a usar (si None, usa default).
         """
         if ocr_strategy is None:
             # Fallback: crear estrategia por defecto
             self.ocr_strategy = crear_ocr_strategy('easyocr')
-        else:
+            else:
             self.ocr_strategy = ocr_strategy
     
     def extraer_texto_region(self, imagen, bbox):
