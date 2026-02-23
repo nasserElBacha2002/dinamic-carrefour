@@ -312,8 +312,8 @@ def run(args: argparse.Namespace) -> int:
         saved = 0
         attempted = 0
 
-        # Carpeta por EAN
-        ean_dir = out_dir / safe_filename(item.ean)
+        # Carpeta por EAN (solo el número, sin procesar)
+        ean_dir = out_dir / item.ean
         ean_dir.mkdir(parents=True, exist_ok=True)
 
         for cand_url in candidates:
@@ -387,7 +387,8 @@ def run(args: argparse.Namespace) -> int:
 
             # Guardar
             ext = guess_extension(ct or "")
-            filename = f"{item.ean}__{saved:03d}.{ext}"
+            # Formato: EAN__numero_de_imagen (empieza en 1)
+            filename = f"{item.ean}__{saved + 1:03d}.{ext}"
             file_path = ean_dir / filename
 
             try:

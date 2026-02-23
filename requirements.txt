@@ -1,16 +1,30 @@
-# Dependencias para Sistema de Inventario de Góndolas (Roboflow Only)
+# ──────────────────────────────────────────────────────────
+# Sistema de Inventario de Góndolas — Sprint 2
+# Arquitectura: YOLO (detección) + CLIP (identificación SKU)
+# ──────────────────────────────────────────────────────────
+
+# Capa A — Detección genérica de productos
+ultralytics>=8.0.0          # YOLOv8 (detector local)
+
+# Capa B — Identificación SKU por embeddings
+openai-clip>=1.0.1          # CLIP ViT-B/32 (extractor de embeddings)
+torch>=2.0.0                # Backend para CLIP y YOLO
+torchvision>=0.15.0         # Transforms para preprocesamiento
 
 # Procesamiento de imágenes y video
-opencv-python>=4.8.0
+opencv-python>=4.8.0        # Lectura de video, frames, crops
+Pillow>=10.0.0              # Carga y conversión de imágenes
 
-# HTTP para comunicación con Roboflow API
-requests>=2.31.0
+# Similitud vectorial
+numpy>=1.24.0               # Vectores, cosine similarity, almacenamiento .npy
+# faiss-cpu>=1.7.0          # (Sprint 2.1) Para búsqueda vectorial a escala 500+ SKUs
 
-# Web scraping para descarga de imágenes (buscarimagenes.py)
-beautifulsoup4>=4.12.0
+# CLI y UX
+tqdm>=4.66.0                # Barras de progreso
 
-# Barra de progreso para CLI
-tqdm>=4.66.0
+# Base de datos SQL Server
+pyodbc>=5.0.0               # Conexión a SQL Server (requiere ODBC Driver 17)
 
-# Utilidades de imagen
-Pillow>=10.0.0
+# Scripts auxiliares
+requests>=2.31.0            # Descarga de imágenes (buscarimagenes.py)
+beautifulsoup4>=4.12.0      # Parsing HTML para descarga de imágenes

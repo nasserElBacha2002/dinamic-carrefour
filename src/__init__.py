@@ -1,2 +1,2 @@
-# Paquete src - Sistema de Inventario de Góndolas MVP
-
+# dinamic-carrefour / src
+# Sistema de Inventario de Góndolas — Sprint 2
