@@ -39,9 +39,9 @@ class SKUIdentifier:
         vector_store: VectorStore,
         categorizer: Optional[PackagingCategorizer] = None,
         eans_file: str = "eans.txt",
-        threshold: float = 0.75,
-        threshold_unknown: float = 0.40,
-        margen_ambiguedad: float = 0.05,
+        threshold: float = 0.28,
+        threshold_unknown: float = 0.20,
+        margen_ambiguedad: float = 0.02,
         review_dir: Optional[str] = "review",
         guardar_review: bool = True,
         verbose: bool = False
@@ -52,9 +52,9 @@ class SKUIdentifier:
             vector_store: Instancia de VectorStore.
             categorizer: Clasificador de packaging (None = busca en todo).
             eans_file: Ruta a eans.txt para descripciones.
-            threshold: Similitud mínima para match (0-1).
-            threshold_unknown: Por debajo = UNKNOWN directo (0-1).
-            margen_ambiguedad: Si top1 - top2 < margen → ambiguous.
+            threshold: Similitud mínima para match (0-1). Default 0.28 (ajustar según data).
+            threshold_unknown: Por debajo = UNKNOWN directo (0-1). Default 0.20 (ajustar según data).
+            margen_ambiguedad: Si top1 - top2 < margen → ambiguous. Default 0.02.
             review_dir: Carpeta donde guardar crops dudosos.
             guardar_review: Si True, guarda crops UNKNOWN/ambiguous.
             verbose: Si True, imprime diagnóstico detallado por crop.
@@ -67,6 +67,14 @@ class SKUIdentifier:
         self.margen_ambiguedad = margen_ambiguedad
         self.guardar_review = guardar_review
         self.verbose = verbose
+        
+        # Validar que las dimensiones coincidan
+        if embedder.dimension != vector_store.dimension:
+            raise ValueError(
+                f"Mismatch de dimensiones: embedder={embedder.dimension}, "
+                f"vector_store={vector_store.dimension}. "
+                f"Regenerá embeddings con: python scripts/agregar_sku.py --todos --forzar"
+            )
 
         # Directorio de review por sesión
         if review_dir:
@@ -104,6 +112,49 @@ class SKUIdentifier:
                     categorias[ean] = parts[2].strip()
 
         return descripciones, categorias
+    
+    def _convertir_id_a_nombre_categoria(self, packaging_type_id: Optional[str]) -> Optional[str]:
+        """
+        Convierte packaging_type_id (de DB) a nombre de categoría (usado en vector store).
+        
+        En la DB, el `id` de packaging_types es el nombre en minúsculas (ej: "bolsa", "botella"),
+        que coincide con el formato usado en eans.txt y el vector store.
+        
+        Si el categorizador devuelve un ID numérico, consulta la DB para obtener el nombre.
+        Si ya es un nombre (como en tu caso), lo retorna directamente.
+        
+        Returns:
+            Nombre de la categoría en minúsculas, o None si no se puede determinar.
+        """
+        if not packaging_type_id or packaging_type_id == "otro":
+            return None
+        
+        # Si no es numérico, asumir que ya es el nombre (como en tu DB donde id="bolsa")
+        if not packaging_type_id.isdigit():
+            return packaging_type_id.lower()
+        
+        # Si es un ID numérico, consultar la DB para obtener el nombre
+        try:
+            from src.database.repository import ProductoRepository
+            repo = ProductoRepository()
+            packaging_type = repo.obtener_packaging_type(packaging_type_id)
+            if packaging_type:
+                # En tu DB, el id es el nombre, pero también podemos usar el campo "nombre"
+                nombre = packaging_type.get("nombre", "")
+                if nombre:
+                    return nombre.lower()
+                # Si no hay "nombre", usar el "id" (que en tu caso es el nombre)
+                cat_id = packaging_type.get("id", "")
+                if cat_id:
+                    return str(cat_id).lower()
+        except Exception as e:
+            # Si falla la DB, loguear pero no usar fallback hardcodeado
+            if self.verbose:
+                print(f"   ⚠️  No se pudo obtener nombre de categoría para ID '{packaging_type_id}' desde DB: {e}")
+        
+        # Si no se pudo obtener desde DB, retornar None
+        # Esto hará que se busque en todo el catálogo (fallback en buscar())
+        return None
 
     def identificar(
         self,
@@ -139,11 +190,32 @@ class SKUIdentifier:
 
         # Clasificar packaging (si disponible)
         categoria_detectada = None
+        categoria_nombre = None
         if self.categorizer:
             categoria_detectada = self.categorizer.clasificar(embedding)
+            # Convertir packaging_type_id a nombre de categoría si es necesario
+            categoria_nombre = self._convertir_id_a_nombre_categoria(categoria_detectada)
+
+        # DIAGNÓSTICO: Obtener totales antes de filtrar
+        candidatos_totales = len(self.store._skus) if hasattr(self.store, '_skus') else 0
 
         # Buscar en store (filtrado por categoría)
-        candidatos = self.store.buscar(embedding, top_k=top_k, categoria=categoria_detectada)
+        candidatos = self.store.buscar(embedding, top_k=top_k, categoria=categoria_nombre)
+        
+        candidatos_en_categoria = len(candidatos) if candidatos else 0
+        
+        # FALLBACK: Si la categoría filtrada da 0 candidatos, buscar en todo el catálogo
+        if categoria_nombre and candidatos_en_categoria == 0:
+            if self.verbose:
+                print(f"   ⚠️  {crop_path}: Categoría '{categoria_nombre}' (ID: {categoria_detectada}) sin candidatos, usando fallback a catálogo completo")
+            candidatos = self.store.buscar(embedding, top_k=top_k, categoria=None)
+            candidatos_en_categoria = len(candidatos) if candidatos else 0
+        
+        if self.verbose:
+            print(f"   🔍 {crop_path}: packaging={categoria_detectada or 'N/A'} ({categoria_nombre or 'N/A'}), "
+                  f"candidatos_categoria={candidatos_en_categoria}, "
+                  f"candidatos_totales={candidatos_totales}")
+        
         if not candidatos:
             self.stats["unknown"] += 1
             return self._resultado_unknown(crop_path, "Store vacío")
@@ -216,7 +288,8 @@ class SKUIdentifier:
         crop: np.ndarray,
         crop_id: str = "crop",
         top_k: int = 5,
-        threshold: Optional[float] = None
+        threshold: Optional[float] = None,
+        categoria_forzada: Optional[str] = None
     ) -> Dict:
         """
         Identifica SKU desde un crop ya cargado en memoria (numpy BGR).
@@ -226,6 +299,8 @@ class SKUIdentifier:
             crop_id: Identificador para review/logging.
             top_k: Candidatos.
             threshold: Override.
+            categoria_forzada: Si se proporciona, usa esta categoría directamente
+                              sin recalcular packaging (útil para splits).
 
         Returns:
             Mismo formato que identificar().
@@ -242,20 +317,49 @@ class SKUIdentifier:
                 "top_matches": [], "status": "unknown", "categoria": ""
             }
 
-        # Clasificar packaging (si el categorizador está disponible)
+        # Clasificar packaging (si el categorizador está disponible y no se fuerza)
         categoria_detectada = None
-        if self.categorizer:
+        categoria_nombre = None
+        if categoria_forzada:
+            # Usar categoría precalculada (evita recalcular en splits)
+            categoria_nombre = categoria_forzada
+            categoria_detectada = categoria_forzada
+        elif self.categorizer:
             categoria_detectada = self.categorizer.clasificar(embedding)
             # Contar categorías detectadas para estadísticas
             self.stats["categorias_detectadas"][categoria_detectada] = \
                 self.stats["categorias_detectadas"].get(categoria_detectada, 0) + 1
+            
+            # Convertir packaging_type_id a nombre de categoría si es necesario
+            categoria_nombre = self._convertir_id_a_nombre_categoria(categoria_detectada)
+
+        # DIAGNÓSTICO: Obtener totales antes de filtrar
+        candidatos_totales = len(self.store._skus) if hasattr(self.store, '_skus') else 0
 
         # Buscar en store (filtrado por categoría si está disponible)
+        # Usar nombre de categoría (no ID) para el filtro
         candidatos = self.store.buscar(
-            embedding, top_k=top_k, categoria=categoria_detectada
+            embedding, top_k=top_k, categoria=categoria_nombre
         )
+        
+        candidatos_en_categoria = len(candidatos) if candidatos else 0
+        
+        # FALLBACK: Si la categoría filtrada da 0 candidatos, buscar en todo el catálogo
+        if categoria_nombre and candidatos_en_categoria == 0:
+            if self.verbose:
+                print(f"   ⚠️  {crop_id}: Categoría '{categoria_nombre}' (ID: {categoria_detectada}) sin candidatos, usando fallback a catálogo completo")
+            candidatos = self.store.buscar(embedding, top_k=top_k, categoria=None)
+            candidatos_en_categoria = len(candidatos) if candidatos else 0
+        
+        if self.verbose:
+            print(f"   🔍 {crop_id}: packaging={categoria_detectada or 'N/A'} ({categoria_nombre or 'N/A'}), "
+                  f"candidatos_categoria={candidatos_en_categoria}, "
+                  f"candidatos_totales={candidatos_totales}")
+        
         if not candidatos:
             self.stats["unknown"] += 1
+            if self.verbose:
+                print(f"   ❌ {crop_id}: Store vacío o sin candidatos")
             return {
                 "ean": "UNKNOWN", "descripcion": "", "confianza": 0.0,
                 "top_matches": [], "status": "unknown",
@@ -290,12 +394,18 @@ class SKUIdentifier:
         # Diagnóstico verbose
         if self.verbose:
             icon = {"matched": "✅", "ambiguous": "⚠️", "unknown": "❌"}.get(status, "?")
-            cat_str = f" [{categoria_detectada}]" if categoria_detectada else ""
+            cat_str = f" [{categoria_detectada or categoria_nombre or 'N/A'}]" if (categoria_detectada or categoria_nombre) else ""
             margin_str = ""
             if len(candidatos) >= 2:
                 margin_str = f" Δ={top1_sim - candidatos[1][1]:.4f}"
+            
+            # Mostrar similitudes top-5 para diagnóstico
+            sims_top5 = [round(s, 4) for _, s in candidatos[:5]]
+            sims_str = f" top5_sims={sims_top5}" if len(sims_top5) > 1 else ""
+            
             print(f"   {icon} {crop_id}{cat_str}: {status} → {ean_final} "
-                  f"(sim={top1_sim:.4f}{margin_str})")
+                  f"(sim={top1_sim:.4f}{margin_str}, candidatos={candidatos_en_categoria}/{candidatos_totales}{sims_str})")
+            print(f"      thresholds: match>={th:.3f}, unknown<{self.threshold_unknown:.3f}, margin={self.margen_ambiguedad:.3f}")
             for m in top_matches[:3]:
                 tag = "👈" if m["ean"] == ean_final else "  "
                 desc_short = m["descripcion"][:35] if m["descripcion"] else ""

@@ -23,6 +23,26 @@ try:
     _VISUAL_AVAILABLE = True
 except ImportError:
     _VISUAL_AVAILABLE = False
+import os
+import tempfile
+from datetime import datetime
+
+
+def _atomic_write_jsonl(path: Path, rows: List[Dict]) -> None:
+    """Escritura atómica: escribe a temp y luego reemplaza el archivo original."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        os.replace(tmp_path, path)  # atomic en mismo filesystem
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
 
 def cargar_metadata(learning_dir: Path) -> List[Dict]:
@@ -124,7 +144,7 @@ def revisar_interactivo(crops: List[Dict], learning_dir: Path, solo_tipo: Option
             ean = respuesta
             crop_data["review"]["status"] = "reviewed"
             crop_data["review"]["assigned_ean"] = ean
-            crop_data["review"]["reviewed_at"] = __import__("datetime").datetime.now().isoformat()
+            crop_data["review"]["reviewed_at"] = datetime.now().isoformat()
             revisados += 1
             print(f"   ✅ Asignado: {ean}")
         else:
@@ -151,10 +171,8 @@ def revisar_interactivo(crops: List[Dict], learning_dir: Path, solo_tipo: Option
                 except json.JSONDecodeError:
                     continue
         
-        # Guardar
-        with open(metadata_file, "w", encoding="utf-8") as f:
-            for crop in todos_crops:
-                f.write(json.dumps(crop, ensure_ascii=False) + "\n")
+        # Guardar (atomic write)
+        _atomic_write_jsonl(metadata_file, todos_crops)
         
         print(f"\n✅ {revisados} crops revisados y guardados")
         print(f"   Próximo paso: ejecutar script para absorber crops al catálogo")

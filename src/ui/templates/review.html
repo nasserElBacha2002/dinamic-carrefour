@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Revisión</title>
+  <link rel="stylesheet" href="/static/styles.css"/>
+</head>
+<body>
+  <a id="back" href="/">← Volver</a>
+  <h1>Revisión — <span id="runId">{{RUN_ID}}</span></h1>
+
+  <div id="progress"></div>
+
+  <div class="review-layout">
+    <div class="left">
+      <img id="crop" />
+      <div class="controls">
+        <input id="eanInput" placeholder="EAN..." />
+        <button id="btnAssign">Asignar EAN</button>
+        <button id="btnSkip">Skip</button>
+      </div>
+
+      <div id="candidates"></div>
+      <div id="dbResults"></div>
+    </div>
+
+    <div class="right">
+      <h3>Items</h3>
+      <div id="list" class="list"></div>
+
+      <hr/>
+      <button id="btnAbsorb">Absorber</button>
+      <pre id="absorbLog"></pre>
+    </div>
+  </div>
+
+  <script>window.RUN_ID="{{RUN_ID}}";</script>
+  <script src="/static/review.js"></script>
+</body>
+</html>

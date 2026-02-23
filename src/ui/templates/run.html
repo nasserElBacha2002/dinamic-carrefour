@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Reporte</title>
+  <link rel="stylesheet" href="/static/styles.css"/>
+</head>
+<body>
+  <a href="/">← Volver</a>
+  <h1>Reporte — <span id="runId">{{RUN_ID}}</span></h1>
+
+  <div id="actions"></div>
+  <div id="csv"></div>
+
+  <h2>Frames</h2>
+  <div id="frames" class="grid"></div>
+
+  <script>window.RUN_ID="{{RUN_ID}}";</script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

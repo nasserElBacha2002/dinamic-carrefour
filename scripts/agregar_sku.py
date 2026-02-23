@@ -197,8 +197,8 @@ def main():
                         help="Directorio de imágenes de referencia")
     parser.add_argument("--embeddings-dir", default="catalog/embeddings",
                         help="Directorio de embeddings")
-    parser.add_argument("--clip-model", default="ViT-B/32",
-                        help="Modelo CLIP (default: ViT-B/32)")
+    parser.add_argument("--clip-model", default="ViT-B/16",
+                        help="Modelo CLIP (default: ViT-B/16)")
 
     args = parser.parse_args()
 

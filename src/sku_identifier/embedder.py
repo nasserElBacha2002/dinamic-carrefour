@@ -6,6 +6,7 @@ Convierte una imagen (o crop de producto) en un vector numérico de 512 dimensio
 Usa OpenAI CLIP ViT-B/32 pre-entrenado — no requiere entrenamiento adicional.
 """
 
+import os
 import numpy as np
 from pathlib import Path
 from typing import List, Optional
@@ -25,6 +26,32 @@ MODELOS_CLIP = {
 MODELO_DEFAULT = "ViT-B/16"
 
 
+def _obtener_modelo_desde_env() -> str:
+    """
+    Obtiene el modelo CLIP desde variable de entorno.
+    
+    Variable de entorno: CLIP_MODEL
+    Valores válidos: "ViT-B/32", "ViT-B/16", "ViT-L/14"
+    
+    Returns:
+        Nombre del modelo a usar (validado).
+    """
+    modelo_env = os.getenv("CLIP_MODEL", "").strip()
+    
+    if not modelo_env:
+        return MODELO_DEFAULT
+    
+    # Validar que el modelo sea válido
+    if modelo_env in MODELOS_CLIP:
+        return modelo_env
+    
+    # Si no es válido, mostrar warning y usar default
+    print(f"   ⚠️  Modelo CLIP inválido en CLIP_MODEL: '{modelo_env}'")
+    print(f"       Modelos válidos: {', '.join(MODELOS_CLIP.keys())}")
+    print(f"       Usando default: {MODELO_DEFAULT}")
+    return MODELO_DEFAULT
+
+
 class CLIPEmbedder:
     """
     Extractor de embeddings usando CLIP.
@@ -35,14 +62,31 @@ class CLIPEmbedder:
 
     def __init__(
         self,
-        modelo: str = MODELO_DEFAULT,
+        modelo: Optional[str] = None,
         device: str = "auto"
     ):
         """
         Args:
             modelo: Nombre del modelo CLIP ("ViT-B/32", "ViT-B/16", "ViT-L/14").
+                   Si es None, se lee desde variable de entorno CLIP_MODEL.
+                   Si CLIP_MODEL no está definida, usa el default.
             device: "auto", "cpu", "cuda", "mps".
         """
+        # Determinar modelo: parámetro > variable de entorno > default
+        if modelo is None:
+            modelo = _obtener_modelo_desde_env()
+            # Determinar fuente: env o default
+            self._modelo_fuente = "variable de entorno CLIP_MODEL" if os.getenv("CLIP_MODEL") else "default"
+        else:
+            self._modelo_fuente = "parámetro explícito"
+        
+        # Validar modelo
+        if modelo not in MODELOS_CLIP:
+            raise ValueError(
+                f"Modelo CLIP inválido: '{modelo}'. "
+                f"Modelos válidos: {', '.join(MODELOS_CLIP.keys())}"
+            )
+        
         # Determinar dispositivo
         if device == "auto":
             if torch.cuda.is_available():
@@ -55,9 +99,10 @@ class CLIPEmbedder:
             self._device = device
 
         self._modelo_nombre = modelo
-        self._dimension = MODELOS_CLIP.get(modelo, 512)
+        self._dimension = MODELOS_CLIP[modelo]
 
         print(f"🔧 Cargando CLIP: {modelo}")
+        print(f"   Fuente: {self._modelo_fuente}")
         print(f"   Dispositivo: {self._device}")
         print(f"   Dimensión embedding: {self._dimension}")
 

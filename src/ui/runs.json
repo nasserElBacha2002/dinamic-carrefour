@@ -1,0 +1,66 @@
+[
+  {
+    "run_id": "IMG_2196_20260220_130719",
+    "video": "IMG_2196.MOV",
+    "output_dir": "/Users/nasserelbacha/Documents/Dinamic sistems/dinamic-carrefour/output/IMG_2196_20260220_130724",
+    "status": "done",
+    "reviewed": true,
+    "absorbed": false
+  },
+  {
+    "run_id": "IMG_2196_20260220_131835",
+    "video": "IMG_2196.MOV",
+    "output_dir": null,
+    "status": "running",
+    "reviewed": false,
+    "absorbed": false
+  },
+  {
+    "run_id": "IMG_2195_20260220_131924",
+    "video": "IMG_2195.MOV",
+    "output_dir": null,
+    "status": "running",
+    "reviewed": false,
+    "absorbed": false
+  },
+  {
+    "run_id": "IMG_2197_20260220_132709",
+    "video": "IMG_2197.MOV",
+    "output_dir": null,
+    "status": "running",
+    "reviewed": false,
+    "absorbed": false
+  },
+  {
+    "run_id": "IMG_2199_20260220_132826",
+    "video": "IMG_2199.MOV",
+    "output_dir": null,
+    "status": "running",
+    "reviewed": false,
+    "absorbed": false
+  },
+  {
+    "run_id": "IMG_2199_20260220_133016",
+    "video": "IMG_2199.MOV",
+    "output_dir": null,
+    "status": "running",
+    "reviewed": false,
+    "absorbed": false
+  },
+  {
+    "run_id": "IMG_2201_20260220_155518",
+    "video": "IMG_2201.MOV",
+    "output_dir": null,
+    "status": "running",
+    "reviewed": false,
+    "absorbed": false
+  },
+  {
+    "run_id": "IMG_2201_20260220_155531",
+    "video": "IMG_2201.MOV",
+    "output_dir": null,
+    "status": "running",
+    "reviewed": false,
+    "absorbed": false
+  }
+]

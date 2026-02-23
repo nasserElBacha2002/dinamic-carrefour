@@ -13,6 +13,8 @@ Esto:
 
 Usa CLIP zero-shot: compara el embedding visual del crop contra embeddings
 de texto que describen cada tipo de packaging. No requiere entrenamiento.
+
+Las categorías se cargan desde la base de datos (tabla packaging_types).
 """
 
 import numpy as np
@@ -22,64 +24,48 @@ import torch
 import clip
 
 
-# ─── Categorías de packaging ────────────────────────────────────────────────
-# Cada categoría tiene múltiples descripciones textuales para que CLIP
-# entienda mejor qué buscar (prompt engineering zero-shot).
-
-CATEGORIAS_PACKAGING: Dict[str, List[str]] = {
-    "botella": [
-        "a plastic bottle on a shelf",
-        "a PET bottle of soda",
-        "a water bottle",
-        "a beverage bottle",
-        "a plastic drink bottle",
-    ],
-    "lata": [
-        "a metal can on a shelf",
-        "an aluminum soda can",
-        "a beer can",
-        "a canned drink",
-        "a tin can of food",
-    ],
-    "bolsa": [
-        "a bag of chips on a shelf",
-        "a plastic bag of snacks",
-        "a bag of bread",
-        "a flexible plastic package",
-        "a bag of food on a shelf",
-    ],
-    "caja": [
-        "a cardboard box on a shelf",
-        "a cereal box",
-        "a box of cookies",
-        "a rectangular cardboard package",
-        "a tea box",
-    ],
-    "paquete": [
-        "a sealed package of yerba mate",
-        "a foil package of coffee",
-        "a sealed bag of rice",
-        "a metallic sealed package",
-        "a vacuum sealed food package",
-    ],
-    "tubo": [
-        "a tube of toothpaste",
-        "a plastic tube on a shelf",
-        "a squeezable tube",
-        "a cosmetic tube",
-        "a hygiene product tube",
-    ],
-    "frasco": [
-        "a glass jar on a shelf",
-        "a jar of jam",
-        "a sauce bottle",
-        "a glass container with lid",
-        "a small glass jar of food",
-    ],
-}
-
-# Categorías válidas (para validación)
-CATEGORIAS_VALIDAS = set(CATEGORIAS_PACKAGING.keys())
+def _cargar_categorias_desde_db() -> Optional[Dict[str, List[str]]]:
+    """
+    Carga categorías de packaging desde la base de datos.
+    
+    Returns:
+        Dict {id_categoria: [prompts]} o None si falla.
+    """
+    try:
+        from src.database.repository import ProductoRepository
+        
+        repo = ProductoRepository()
+        packaging_types = repo.listar_packaging_types()
+        
+        if not packaging_types:
+            return None
+        
+        categorias: Dict[str, List[str]] = {}
+        for pt in packaging_types:
+            cat_id = str(pt.get("id", ""))
+            prompts = pt.get("prompts_clip", [])
+            
+            # Validar que prompts sea una lista de strings
+            if isinstance(prompts, list) and all(isinstance(p, str) for p in prompts):
+                categorias[cat_id] = prompts
+            elif prompts:
+                # Si viene como string, intentar parsear
+                import json
+                try:
+                    if isinstance(prompts, str):
+                        prompts = json.loads(prompts)
+                    if isinstance(prompts, list):
+                        categorias[cat_id] = [str(p) for p in prompts]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        
+        if categorias:
+            return categorias
+        return None
+        
+    except Exception as e:
+        print(f"   ⚠️  No se pudieron cargar categorías desde DB: {e}")
+        return None
 
 
 class PackagingCategorizer:
@@ -87,26 +73,53 @@ class PackagingCategorizer:
     Clasifica un crop de producto por tipo de packaging usando CLIP zero-shot.
 
     Flujo:
-      1. Pre-calcula embeddings de texto para cada categoría (una sola vez).
-      2. Para cada crop, genera embedding visual.
-      3. Compara contra embeddings de texto → la categoría con mayor similitud gana.
+      1. Carga categorías desde DB (tabla packaging_types).
+      2. Pre-calcula embeddings de texto para cada categoría (una sola vez).
+      3. Para cada crop, genera embedding visual.
+      4. Compara contra embeddings de texto → la categoría con mayor similitud gana.
     """
 
     def __init__(
         self,
         model,
         device: str = "cpu",
-        categorias: Optional[Dict[str, List[str]]] = None
+        categorias: Optional[Dict[str, List[str]]] = None,
+        usar_db: bool = True,
     ):
         """
         Args:
             model: Modelo CLIP ya cargado (compartido con el embedder).
             device: Dispositivo ("cpu", "cuda", "mps").
-            categorias: Override de categorías (default: CATEGORIAS_PACKAGING).
+            categorias: Override de categorías (si se proporciona, se usa directamente).
+            usar_db: Si True, intenta cargar desde DB. Si False, requiere categorias.
+        
+        Raises:
+            ValueError: Si no se pueden cargar categorías desde DB y no se proporcionan manualmente.
         """
         self._model = model
         self._device = device
-        self._categorias = categorias or CATEGORIAS_PACKAGING
+        
+        # Cargar categorías: override manual > DB
+        if categorias is not None:
+            self._categorias = categorias
+            self._fuente = "override"
+        elif usar_db:
+            categorias_db = _cargar_categorias_desde_db()
+            print(f"   Categorías cargadas desde DB: {categorias_db}")
+            if categorias_db:
+                self._categorias = categorias_db
+                self._fuente = "database"
+            else:
+                raise ValueError(
+                    "No se pudieron cargar categorías desde la base de datos. "
+                    "Asegúrate de que la tabla 'packaging_types' exista y tenga datos, "
+                    "o proporciona categorías manualmente con el parámetro 'categorias'."
+                )
+        else:
+            raise ValueError(
+                "Se requiere cargar categorías desde DB (usar_db=True) o proporcionarlas "
+                "manualmente (categorias=...)."
+            )
 
         # Pre-calcular embeddings de texto para cada categoría
         self._text_embeddings: Dict[str, np.ndarray] = {}
@@ -132,7 +145,11 @@ class PackagingCategorizer:
             self._text_embeddings[cat] = centroide.cpu().numpy()
 
         n_cats = len(self._text_embeddings)
-        print(f"   📦 Categorizador: {n_cats} categorías de packaging cargadas")
+        fuente_str = {
+            "database": "desde DB",
+            "override": "override manual",
+        }.get(self._fuente, "desconocida")
+        print(f"   📦 Categorizador: {n_cats} categorías de packaging cargadas ({fuente_str})")
 
     def clasificar_embedding(
         self,
@@ -152,7 +169,11 @@ class PackagingCategorizer:
         embedding = embedding.flatten()
         norm = np.linalg.norm(embedding)
         if norm < 1e-10:
-            return [("botella", 0.0)]  # fallback
+            # Si el embedding es inválido, retornar la primera categoría disponible con similitud 0
+            if self._text_embeddings:
+                primera_cat = list(self._text_embeddings.keys())[0]
+                return [(primera_cat, 0.0)]
+            return []
         embedding = embedding / norm
 
         resultados = []

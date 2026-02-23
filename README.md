@@ -1,10 +1,3 @@
-Abajo te dejo el **README actualizado para la nueva versión (v5.4 / Sprint 2.3)**, alineado con tu **YOLO retail-ready (sin COCO mapping)** + **categorización por packaging (CLIP)** + **identificación SKU (CLIP embeddings)** + **SQL Server opcional**.
-Además agrego una sección completa de **entrenamiento del detector** (YOLO 1-clase `product`) y una sección de **“Nuevos pasos a hacer”** (qué cambia y qué tenés que ejecutar/ajustar).
-
-> Nota: Mantengo el documento “copiable” como README.md.
-
----
-
 # Sistema de Inventario de Góndolas — Sprint 2.1 (v5.5)
 
 > **⭐ NUEVO**: Sistema de Aprendizaje Continuo implementado. El sistema ahora mejora automáticamente con cada ejecución.  
@@ -570,16 +563,64 @@ python run.py data/IMG_2196.MOV \
 
 ### Todo da UNKNOWN
 
-* faltan embeddings `.npy`
-* corré: `python scripts/agregar_sku.py --todos` o por EAN
-* bajá `--sku-threshold` para diagnosticar (`0.65`)
+**Causas comunes**:
+
+1. **Faltan embeddings**:
+   ```bash
+   python scripts/agregar_sku.py --todos --forzar
+   ```
+
+2. **Mismatch de modelo CLIP**:
+   ```bash
+   # Asegurarse de usar el mismo modelo en todo
+   export CLIP_MODEL="ViT-B/16"  # o el que uses
+   python scripts/agregar_sku.py --todos --forzar
+   python run.py data/video.MOV
+   ```
+
+3. **Thresholds demasiado altos** (ya ajustados en v5.6):
+   - Defaults actuales: `match=0.28`, `unknown=0.20`
+   - Si aún hay problemas, ajustar según verbose output
+
+4. **Categoría sin candidatos**:
+   - El sistema tiene fallback automático
+   - Verificar con `--verbose` si la categoría detectada tiene candidatos
+
+**Diagnóstico**:
+```bash
+python run.py data/video.MOV --verbose
+# Buscar en output: top5_sims, candidatos_categoria, candidatos_totales
+```
+
+### Productos identificados incorrectamente
+
+1. **Verificar similitudes en verbose**:
+   ```bash
+   python run.py data/video.MOV --verbose
+   # Si top1_sim está cerca de top2_sim → ambiguous (esperado)
+   # Si top1_sim es muy bajo (<0.25) → considerar agregar más imágenes al catálogo
+   ```
+
+2. **Ajustar thresholds**:
+   ```bash
+   # Si muchos matched con similitudes bajas
+   python run.py data/video.MOV --sku-threshold 0.30
+   
+   # Si muchos unknown con similitudes razonables
+   python run.py data/video.MOV --unknown-threshold 0.18
+   ```
+
+3. **Mejorar catálogo**:
+   - Usar sistema de aprendizaje continuo
+   - Revisar crops dudosos y absorber al catálogo
+   - Agregar más imágenes de referencia por SKU
 
 ---
 
 ## Versión
 
-* **Versión**: **5.5** (Sprint 2.1 — Sistema de Aprendizaje Continuo)
-* **Última actualización**: **19 Febrero 2026**
+* **Versión**: **5.6** (Política de Decisión Genérica)
+* **Última actualización**: **20 Febrero 2026**
 * **Inferencia externa**: ninguna
 * **Catálogo actual**: 9 SKUs
 * **Packaging**: botella, lata, bolsa, caja, paquete, tubo, frasco
@@ -594,6 +635,17 @@ python run.py data/IMG_2196.MOV \
 * **Metadata completa**: JSONL con toda la información de cada decisión (detection, packaging, SKU identification)
 * **Integración automática**: Learning Manager se activa automáticamente en el pipeline
 
+### Changelog v5.6 (Política de Decisión Genérica)
+
+* **1 bbox = 1 decisión final**: Eliminado doble conteo por split
+* **Decision Policy**: Módulo genérico y escalable para decisiones de identificación
+* **BBox Quality Scorer**: Métricas genéricas de calidad (reemplaza heurísticas hardcodeadas)
+* **Split como fallback controlado**: Split solo si mejora significativamente
+* **Packaging calculado una vez**: Reutilización de categoría en splits (evita recálculo)
+* **Thresholds ajustados para CLIP**: Valores realistas (0.28 match, 0.20 unknown)
+* **Configuración por perfil**: `catalog_only()`, `shelf_video()`, `low_light()`
+* **Pipeline genérico**: Sin código hardcodeado por producto, escalable a cualquier rubro
+
 ### Changelog v5.4
 
 * **YOLO retail-ready**: detección genérica sin COCO mapping
@@ -603,4 +655,227 @@ python run.py data/IMG_2196.MOV \
 
 ---
 
-Si querés, pegame tu `README.md` actual como archivo o texto y te lo devuelvo **en formato “diff”** (qué líneas borrar/agregar) para que lo puedas mergear sin perder nada de lo que ya tenías.
+## Problema de Identificación Actual
+
+### Descripción del Problema
+
+El sistema aún presenta dificultades para identificar correctamente algunos productos, resultando en:
+- Productos identificados como `UNKNOWN` cuando deberían ser reconocidos
+- Falsos positivos (productos incorrectos identificados)
+- Baja confianza en identificaciones correctas
+
+### Causas Identificadas
+
+#### 1. Thresholds de CLIP
+
+**Problema**: Los thresholds originales (0.75 match, 0.40 unknown) eran demasiado altos para similitudes de CLIP en condiciones reales de góndola.
+
+**Solución implementada**: Thresholds ajustados a valores más realistas:
+- `match_threshold = 0.28` (antes 0.75)
+- `unknown_threshold = 0.20` (antes 0.40)
+- `ambiguity_margin = 0.02` (antes 0.005)
+
+**Rango típico de similitudes CLIP**:
+- Similitudes buenas: ~0.22-0.35 (depende de dataset, iluminación, distancia)
+- 0.75 es casi imposible de alcanzar en góndola real
+
+#### 2. Mismatch de Modelo CLIP
+
+**Problema**: Si se generaron embeddings con un modelo CLIP y se ejecuta el pipeline con otro, las similitudes bajan drásticamente.
+
+**Solución**: 
+- Validación de dimensiones al inicializar `SKUIdentifier`
+- Asegurar que `CLIP_MODEL` sea consistente en todo el pipeline
+
+**Cómo verificar**:
+```bash
+# Verificar modelo usado
+export CLIP_MODEL="ViT-B/16"  # o el que uses
+python scripts/agregar_sku.py --todos --forzar
+python run.py data/video.MOV
+```
+
+#### 3. Calidad de Crops
+
+**Problema**: Crops que incluyen:
+- Múltiples productos (bboxes anchos)
+- Carteles promocionales
+- Reflejos y oclusiones
+- Background excesivo
+
+**Solución implementada**:
+- **BBox Quality Scorer**: Métrica genérica que detecta bboxes "mezclados"
+- **Split condicional**: Solo si el resultado full es dudoso Y el bbox tiene calidad baja
+- **Inner crop**: Recorte central (75%) para reducir background
+
+#### 4. Catálogo Insuficiente
+
+**Problema**: 
+- Pocas imágenes de referencia por SKU
+- Imágenes de baja calidad
+- Imágenes no representativas (ángulos, iluminación diferentes)
+
+**Solución**: Sistema de aprendizaje continuo
+- Cada ejecución genera crops dudosos
+- Revisión humana y absorción al catálogo
+- El sistema mejora progresivamente
+
+#### 5. Filtrado por Categoría
+
+**Problema**: Si la categoría detectada no tiene candidatos, el sistema puede fallar.
+
+**Solución implementada**:
+- Fallback automático: si categoría filtrada da 0 candidatos → buscar en todo el catálogo
+- Logging verbose para diagnosticar filtrado
+
+### Diagnóstico
+
+Para diagnosticar problemas de identificación, usar `--verbose`:
+
+```bash
+python run.py data/video.MOV --verbose
+```
+
+El output muestra:
+- `packaging_pred`: Categoría detectada
+- `candidatos_categoria`: Candidatos en la categoría filtrada
+- `candidatos_totales`: Total de SKUs en catálogo
+- `top5_sims`: Similitudes de los top 5 candidatos
+- `thresholds`: Thresholds usados
+
+**Ejemplo de output**:
+```
+   🔍 frame_00005_crop_000: packaging=bolsa (bolsa), candidatos_categoria=3, candidatos_totales=18
+   ✅ frame_00005_crop_000 [bolsa]: matched → 7793890258288 (sim=0.3124 Δ=0.0456, candidatos=3/18 top5_sims=[0.3124, 0.2668, 0.2345, 0.2012, 0.1890])
+      thresholds: match>=0.280, unknown<0.200, margin=0.020
+```
+
+### Ajuste de Thresholds
+
+Si después de los cambios aún hay problemas:
+
+1. **Muchos `matched` con similitudes muy bajas (<0.25)**:
+   ```bash
+   python run.py data/video.MOV --sku-threshold 0.30
+   ```
+
+2. **Muchos `unknown` con similitudes razonables (0.22-0.28)**:
+   ```bash
+   python run.py data/video.MOV --unknown-threshold 0.18
+   ```
+
+3. **Muchos `ambiguous` cuando deberían ser `matched`**:
+   ```bash
+   python run.py data/video.MOV --margen-ambiguedad 0.03
+   ```
+
+### Mejoras Futuras
+
+1. **Temporal Aggregator**: Tracking entre frames para estabilidad
+   - Votación por mayoría en ventana de N frames
+   - Confirmación de EAN si aparece estable X frames
+
+2. **Re-ranking**: Post-procesamiento de candidatos
+   - Considerar metadata adicional (posición, contexto)
+   - Ajuste dinámico de thresholds por SKU
+
+3. **Hard Negative Mining**: Identificar casos problemáticos específicos
+   - Detectar productos que consistentemente se confunden
+   - Agregar imágenes de referencia específicas
+
+4. **Calibración automática**: Ajuste de thresholds basado en métricas
+   - Validación en set de referencia
+   - Optimización de thresholds por métricas (precision/recall)
+
+---
+
+## Política de Decisión Genérica (v5.6)
+
+### Arquitectura
+
+El sistema ahora implementa una **política de decisión genérica y escalable** que separa la lógica de decisión de la implementación específica.
+
+#### Módulos Nuevos
+
+1. **`src/pipeline/decision_policy.py`**: Política de decisión
+   - `DecisionPolicyConfig`: Configuración de thresholds y reglas
+   - `DecisionPolicy`: Lógica de decisión final
+   - Perfiles configurables: `catalog_only()`, `shelf_video()`, `low_light()`
+
+2. **`src/pipeline/bbox_quality.py`**: Scorer de calidad de bbox
+   - Métricas genéricas (aspect ratio, área, confianza YOLO, distancia a bordes)
+   - Score combinado ponderado (configurable)
+
+### Principios de Diseño
+
+1. **1 bbox = 1 decisión final**
+   - Eliminado doble conteo por split
+   - Split solo si mejora significativamente
+
+2. **Split como fallback controlado**
+   - Solo si resultado full es dudoso
+   - Solo si bbox tiene calidad baja (probablemente mezclado)
+   - Solo si split mejora significativamente (`split_delta_min`)
+
+3. **Packaging calculado una vez**
+   - Se calcula en el crop completo
+   - Se reutiliza en splits (evita recálculo)
+
+4. **Sin código hardcodeado**
+   - Métricas genéricas (no específicas de producto)
+   - Configuración por perfil (no por producto)
+   - Escalable a cualquier rubro
+
+### Flujo de Decisión
+
+Para cada bbox:
+
+1. Calcular embedding y packaging (una vez)
+2. Identificar crop completo
+3. Calcular calidad del bbox (genérico)
+4. Si es dudoso Y bbox mezclado → intentar split
+5. Si split mejora → usar split; si no → usar full
+6. Retornar 1 resultado final
+7. Contar 1 EAN (no doble conteo)
+
+### Configuración
+
+Los thresholds y reglas se configuran en `DecisionPolicyConfig`:
+
+```python
+from src.pipeline.decision_policy import DecisionPolicy, DecisionPolicyConfig
+
+# Perfil por defecto (shelf_video)
+policy = DecisionPolicy()
+
+# O usar perfil específico
+config = DecisionPolicyConfig.shelf_video()
+policy = DecisionPolicy(config)
+
+# O personalizar
+config = DecisionPolicyConfig(
+    match_threshold=0.30,
+    unknown_threshold=0.22,
+    ambiguity_margin=0.02,
+    split_delta_min=0.05,
+    bbox_quality_threshold=0.6,
+)
+policy = DecisionPolicy(config)
+```
+
+### Escalabilidad
+
+El sistema es **genérico y escalable**:
+- Cambiar de rubro solo requiere ajustar thresholds en `DecisionPolicyConfig`
+- No hay lógica específica por producto
+- Métricas genéricas aplicables a cualquier tipo de producto
+
+---
+
+## Versión
+
+* **Versión**: **5.6** (Política de Decisión Genérica)
+* **Última actualización**: **20 Febrero 2026**
+* **Inferencia externa**: ninguna
+* **Catálogo actual**: 9 SKUs
+* **Packaging**: botella, lata, bolsa, caja, paquete, tubo, frasco

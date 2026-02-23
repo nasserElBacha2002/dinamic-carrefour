@@ -46,6 +46,9 @@ class VectorStore:
 
         # Cargar índice existente
         self._cargar_indice()
+        
+        # Validar dimensiones al cargar
+        self._validar_dimensiones()
 
     def _cargar_indice(self) -> None:
         """Carga embeddings existentes desde disco."""
@@ -77,6 +80,22 @@ class VectorStore:
 
         if cargados > 0:
             print(f"📦 Vector store: {cargados} SKUs cargados desde {self.embeddings_dir}")
+    
+    def _validar_dimensiones(self) -> None:
+        """Valida que todos los embeddings tengan la dimensión correcta."""
+        errores = []
+        for ean, data in self._skus.items():
+            emb = data.get("embeddings")
+            if emb is not None and emb.shape[1] != self.dimension:
+                errores.append(f"{ean}: esperado {self.dimension}, tiene {emb.shape[1]}")
+        
+        if errores:
+            print(f"   ⚠️  ADVERTENCIA: {len(errores)} SKUs con dimensiones incorrectas:")
+            for err in errores[:5]:  # Mostrar solo los primeros 5
+                print(f"      {err}")
+            if len(errores) > 5:
+                print(f"      ... y {len(errores) - 5} más")
+            print(f"   💡 Regenerá embeddings con: python scripts/agregar_sku.py --todos --forzar")
 
     def _guardar_indice(self) -> None:
         """Persiste el índice JSON a disco."""
@@ -185,6 +204,13 @@ class VectorStore:
 
         # Normalizar query
         query = query.flatten()
+        
+        # Validar dimensión del query
+        if query.shape[0] != self.dimension:
+            print(f"   ⚠️  Dimensión de query incorrecta: esperado {self.dimension}, recibido {query.shape[0]}")
+            print(f"   💡 Verificá que CLIP_MODEL coincida con el usado para generar embeddings")
+            return []
+        
         norm = np.linalg.norm(query)
         if norm < 1e-10:
             return []
@@ -192,12 +218,15 @@ class VectorStore:
 
         # Filtrar por categoría si se especifica
         skus_a_buscar = self._skus
+        candidatos_en_categoria = 0
         if categoria:
             skus_a_buscar = {
                 ean: data for ean, data in self._skus.items()
-                if data.get("metadata", {}).get("categoria", "") == categoria
+                if data.get("metadata", {}).get("categoria", "").lower() == categoria.lower()
             }
+            candidatos_en_categoria = len(skus_a_buscar)
             # Si no hay SKUs en la categoría, buscar en todos (fallback)
+            # Esto se maneja en el identifier para logging, pero aquí también como seguridad
             if not skus_a_buscar:
                 skus_a_buscar = self._skus
 

@@ -55,6 +55,7 @@ def construir_pipeline(args: argparse.Namespace) -> PipelineEngine:
     )
 
     # ── Capa B: Identificador SKU ──────────────────────────────────────
+    # Si se especifica --clip-model, se usa ese valor; si no, se lee de CLIP_MODEL o default
     embedder = CLIPEmbedder(modelo=args.clip_model)
 
     store = VectorStore(
@@ -130,10 +131,10 @@ Ejemplos:
     parser.add_argument("--half", action="store_true", help="Usar FP16 (si aplica)")
 
     # Identificación (Capa B)
-    parser.add_argument("--clip-model", default="ViT-B/32", help="Modelo CLIP (default: ViT-B/32)")
-    parser.add_argument("--sku-threshold", type=float, default=0.70, help="Umbral match SKU (default: 0.70)")
-    parser.add_argument("--unknown-threshold", type=float, default=0.40, help="Por debajo = UNKNOWN (default: 0.40)")
-    parser.add_argument("--margen-ambiguedad", type=float, default=0.005, help="Margen top1-top2 (default: 0.005)")
+    parser.add_argument("--clip-model", default=None, help="Modelo CLIP (default: lee de CLIP_MODEL o usa ViT-B/16)")
+    parser.add_argument("--sku-threshold", type=float, default=0.28, help="Umbral match SKU (default: 0.28, ajustar según data)")
+    parser.add_argument("--unknown-threshold", type=float, default=0.20, help="Por debajo = UNKNOWN (default: 0.20, ajustar según data)")
+    parser.add_argument("--margen-ambiguedad", type=float, default=0.02, help="Margen top1-top2 para ambiguous (default: 0.02)")
     parser.add_argument("--eans-file", default="eans.txt", help="Ruta a eans.txt (default: eans.txt)")
     parser.add_argument("--embeddings-dir", default="catalog/embeddings", help="Directorio embeddings (default: catalog/embeddings)")
 

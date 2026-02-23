@@ -12,6 +12,7 @@ Cada ejecución genera:
 import json
 import cv2
 import numpy as np
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -174,6 +175,42 @@ class LearningManager:
             "learning_dir": str(self.learning_dir.relative_to(self.output_dir.parent)),
             "metadata_file": str(self.metadata_file.relative_to(self.output_dir.parent)),
         }
+
+
+    def guardar_metricas_historicas(self, metrics: Dict[str, Any]) -> Optional[str]:
+        """
+        Guarda métricas de la ejecución en un archivo histórico global (output/metrics_history.jsonl)
+        y además en un archivo por ejecución (learning/metadata/execution_metrics.json).
+
+        Esto sirve para demostrar mejora (UNKNOWN%, AMBIGUOUS%, etc.) a lo largo del tiempo.
+        """
+        try:
+            # Completar defaults
+            record = {
+                "timestamp": datetime.now().isoformat(),
+                "execution_id": self.execution_id,
+                "video_name": Path(self.video_path).name,
+                **(metrics or {}),
+            }
+
+            # 1) Archivo por ejecución
+            per_exec = self.metadata_dir / "execution_metrics.json"
+            with open(per_exec, "w", encoding="utf-8") as f:
+                json.dump(record, f, indent=2, ensure_ascii=False)
+
+            # 2) Histórico global (append)
+            history_file = self.output_dir.parent / "metrics_history.jsonl"
+            history_file.parent.mkdir(parents=True, exist_ok=True)
+            line = json.dumps(record, ensure_ascii=False) + "\n"
+            with open(history_file, "a", encoding="utf-8") as f:
+                f.write(line)
+                f.flush()
+                os.fsync(f.fileno())
+
+            return str(history_file)
+        except Exception as e:
+            print(f"  ⚠️ Error guardando métricas históricas: {e}")
+            return None
 
     def __repr__(self) -> str:
         return f"LearningManager(execution_id={self.execution_id}, crops={self.total_crops_saved})"
