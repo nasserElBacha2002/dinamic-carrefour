@@ -17,7 +17,7 @@ from src.sku_identifier.embedder import CLIPEmbedder
 from src.sku_identifier.vector_store import VectorStore
 from src.sku_identifier.identifier import SKUIdentifier
 from src.sku_identifier.categorizer import PackagingCategorizer
-from src.pipeline.engine import PipelineEngine
+from src.pipeline.core.engine import PipelineEngine
 
 
 def _parse_roi(roi_str: Optional[str]) -> Optional[Tuple[float, float, float, float]]:
@@ -87,13 +87,17 @@ def construir_pipeline(args: argparse.Namespace) -> PipelineEngine:
     # ── Pipeline ───────────────────────────────────────────────────────
     engine = PipelineEngine(
         detector=detector,
-        identificador=identificador,
+        identifier=identificador,
         output_base=args.output,
-        fps_extraccion=args.fps,
-        rotar=args.rotar,
-        generar_anotaciones=not args.sin_anotaciones,
-        guardar_crops=args.guardar_crops,
-        usar_db=args.db,
+        fps_extraction=args.fps,
+        rotate=args.rotar,
+        generate_annotations=not args.sin_anotaciones,
+        save_crops=args.guardar_crops,
+        use_db=args.db,
+        use_tracks=args.use_tracks,  # Sprint 3
+        track_iou=args.track_iou,
+        track_min_hits=args.track_min_hits,
+        track_max_age=args.track_max_age,
     )
 
     return engine
@@ -157,6 +161,12 @@ Ejemplos:
 
     # Debug
     parser.add_argument("--verbose", action="store_true", help="Diagnóstico detallado por crop")
+    
+    # Sprint 3: Tracking
+    parser.add_argument("--use-tracks", action="store_true", help="[Sprint 3] Usar tracking temporal (experimental)")
+    parser.add_argument("--track-iou", type=float, default=0.4, help="[Sprint 3] IoU threshold para tracking (default: 0.4)")
+    parser.add_argument("--track-min-hits", type=int, default=3, help="[Sprint 3] Mínimo hits para track válido (default: 3)")
+    parser.add_argument("--track-max-age", type=int, default=15, help="[Sprint 3] Máx frames sin update antes de terminar track (default: 15)")
 
     return parser
 
@@ -180,7 +190,7 @@ def main():
 
     # Construir y ejecutar pipeline
     engine = construir_pipeline(args)
-    resultado = engine.procesar_video(str(video_path))
+    resultado = engine.process_video(str(video_path))
 
     if isinstance(resultado, dict) and "error" in resultado:
         print(f"❌ Error en pipeline: {resultado['error']}")

@@ -42,3 +42,6 @@ review/
 *.pkl
 *.pickle
 /tmp/
+
+# Videos y datos de entrada (archivos grandes)
+data/
