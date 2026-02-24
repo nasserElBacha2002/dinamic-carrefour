@@ -15,7 +15,7 @@ if str(project_root) not in sys.path:
 
 from src.ui.runner import ProcessRunner
 from src.ui.state import StateStore, RunState
-from src.ui.services.report import read_inventory_csv, list_frames
+from src.ui.services.report import read_inventory_csv, list_frames, enrich_inventory_with_product_names
 from src.ui.services.review_store import ReviewStore
 from src.ui.services.db import buscar_productos
 
@@ -92,6 +92,12 @@ async def api_run(req: Request):
     cmd = ["python", str(run_py_path), str(DATA_DIR / video)]
     if guardar_crops:
         cmd.append("--guardar-crops")
+    
+    # Sprint 3: Activar tracking automáticamente desde la UI
+    cmd.append("--use-tracks")
+    cmd.extend(["--track-iou", "0.35"])
+    cmd.extend(["--track-min-hits", "3"])
+    cmd.extend(["--track-max-age", "15"])
 
     # respeta CLIP_MODEL del entorno si está seteado
     env = os.environ.copy()
@@ -128,6 +134,9 @@ def api_report(run_id: str):
     csv_path = reporte_dir / "inventario_sku.csv"
     
     rows = read_inventory_csv(csv_path)
+    # Enriquecer con nombres de productos desde la base de datos
+    rows = enrich_inventory_with_product_names(rows)
+    
     frames = list_frames(reporte_dir)
     has_learning = (rd / "learning").exists()
     

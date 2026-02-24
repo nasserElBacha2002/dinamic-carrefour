@@ -1,27 +1,56 @@
 """
-Pipeline module — Procesamiento de video para detección e identificación de SKUs.
+Pipeline module — Main entry point for pipeline components.
 
-Módulos:
-- engine: Motor principal del pipeline (orquestador de alto nivel)
-- video_reader: Lectura eficiente de frames
-- crop_processor: Procesamiento y heurísticas de crops
-- detection_processor: Procesamiento de detecciones individuales
-- report_generator: Generación de reportes y anotaciones
-- learning_integration: Integración con el Learning Manager
+This module provides backward-compatible imports for the main components.
+For better organization, use direct imports from submodules:
+- src.pipeline.core (engine, video_reader)
+- src.pipeline.processing (detection, crops, decisions)
+- src.pipeline.tracking (track runtime, setup, export)
+- src.pipeline.output (reports, results, learning)
 """
 
-from .engine import PipelineEngine
-from .video_reader import VideoFrameReader
-from .crop_processor import CropProcessor
-from .detection_processor import DetectionProcessor
-from .report_generator import ReportGenerator
-from .learning_integration import LearningIntegration
+# Backward compatibility: export main components
+from .core import PipelineEngine, VideoFrameReader
+from .processing import (
+    DetectionProcessor,
+    CropProcessor,
+    DecisionPolicy,
+    DecisionPolicyConfig,
+    BBoxQualityScorer,
+)
+from .tracking import (
+    TrackRuntime,
+    TrackSetup,
+    TrackExporter,
+    convert_yolo_detections_to_detections,
+    export_tracks_debug,
+    filter_detections_by_area,
+)
+from .output import (
+    ReportGenerator,
+    ResultBuilder,
+    LearningIntegration,
+)
 
 __all__ = [
+    # Core
     "PipelineEngine",
     "VideoFrameReader",
-    "CropProcessor",
+    # Processing
     "DetectionProcessor",
+    "CropProcessor",
+    "DecisionPolicy",
+    "DecisionPolicyConfig",
+    "BBoxQualityScorer",
+    # Tracking
+    "TrackRuntime",
+    "TrackSetup",
+    "TrackExporter",
+    "convert_yolo_detections_to_detections",
+    "export_tracks_debug",
+    "filter_detections_by_area",
+    # Output
     "ReportGenerator",
+    "ResultBuilder",
     "LearningIntegration",
 ]
