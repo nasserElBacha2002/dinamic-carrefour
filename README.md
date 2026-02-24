@@ -1,80 +1,118 @@
-# Sistema de Inventario de Góndolas — Sprint 2.1 (v5.5)
+# Sistema de Inventario Inteligente — v6.0
 
-> **⭐ NUEVO**: Sistema de Aprendizaje Continuo implementado. El sistema ahora mejora automáticamente con cada ejecución.  
-> Ver [LEARNING_SYSTEM.md](LEARNING_SYSTEM.md) para documentación completa del sistema de aprendizaje.
+> **🎯 Nuevo Enfoque**: Sistema de identificación y conteo de productos para **depósitos y almacenes**, con soporte para unidades logísticas (pack/box/pallet) e identificación híbrida (barcode/OCR/visual).
 
-Sistema de visión artificial para **detectar, identificar y contar** productos en góndolas de supermercado a partir de videos.
+Sistema de visión artificial para **detectar, identificar y contar** productos en videos de depósitos y almacenes, con tracking temporal y aprendizaje continuo.
 
-**Arquitectura (2 capas + categorización):**
+**Arquitectura (3 capas + tracking + aprendizaje):**
 
-* **Capa A — Detección genérica (YOLOv8, local)**: detecta **instancias de producto** (no SKUs, no COCO mapping).
+* **Capa A — Detección genérica (YOLOv8, local)**: detecta **instancias de producto** (no SKUs específicos).
 * **Categorización por packaging (CLIP zero-shot)**: clasifica el tipo de envase (botella, lata, bolsa, caja, etc.) para **filtrar el espacio de búsqueda**.
 * **Capa B — Identificación SKU (CLIP embeddings)**: compara el embedding del crop contra el catálogo (filtrado por categoría) y devuelve **EAN + confianza**.
+* **Capa C — Tracking temporal (SORT-like)**: asigna IDs persistentes a productos a lo largo de frames, permitiendo **conteo por unidad** y **consolidación de decisiones**.
+* **Aprendizaje continuo**: sistema evolutivo que mejora automáticamente con cada ejecución.
 
-✅ **Objetivo retail real:** separar “dónde hay un producto” (estable) de “qué SKU es” (dinámico).
-✅ **Escala:** agregar SKUs no requiere reentrenar (solo sumar imágenes + embeddings).
-✅ **Offline:** todo corre local (SQL Server es opcional).
+✅ **Objetivo warehouse/depot:** identificación y conteo preciso en entornos de depósito, con soporte para unidades logísticas.  
+✅ **Escala:** agregar SKUs no requiere reentrenar (solo sumar imágenes + embeddings).  
+✅ **Offline:** todo corre local (SQL Server es opcional).  
+✅ **Tracking:** conteo por unidad con IDs persistentes, eliminando duplicados temporales.
 
 ---
 
 ## Tabla de Contenidos
 
-1. [Cambio de arquitectura](#cambio-de-arquitectura)
-2. [Cómo funciona](#cómo-funciona)
-3. [Estructura del proyecto](#estructura-del-proyecto)
-4. [Requisitos previos](#requisitos-previos)
-5. [Instalación](#instalación)
-6. [Uso principal](#uso-principal--procesar-un-video)
-7. [Agregar un SKU nuevo](#agregar-un-sku-nuevo-5-minutos)
-8. [Categorización por packaging](#categorización-por-packaging)
-9. [Detector YOLO retail-ready (Capa A)](#detector-yolo-retail-ready-capa-a)
-10. [Identificador SKU (Capa B)](#identificador-sku-capa-b)
-11. [Pipeline + deduplicación](#pipeline--deduplicación-por-frame)
-12. [Sistema de Aprendizaje Continuo](#sistema-de-aprendizaje-continuo-dataset-evolutivo--v21) ⭐ **NUEVO**
-13. [SQL Server (opcional)](#sql-server-opcional)
-14. [Entrenar el detector YOLO (1 clase product)](#entrenar-el-detector-yolo-1-clase-product)
-15. [Migración a v5.4](#migración-a-v54-qué-cambió-y-qué-hacer)
-16. [Roadmap](#roadmap-sprints-37)
-17. [Troubleshooting](#troubleshooting)
-18. [Versión](#versión)
+1. [Objetivo y Enfoque](#objetivo-y-enfoque)
+2. [Arquitectura](#arquitectura)
+3. [Cómo funciona](#cómo-funciona)
+4. [Estructura del proyecto](#estructura-del-proyecto)
+5. [Requisitos previos](#requisitos-previos)
+6. [Instalación](#instalación)
+7. [Uso principal](#uso-principal--procesar-un-video)
+8. [Tracking temporal (Sprint 3.1)](#tracking-temporal-sprint-31) ⭐ **NUEVO**
+9. [Agregar un SKU nuevo](#agregar-un-sku-nuevo-5-minutos)
+10. [Sistema de Aprendizaje Continuo](#sistema-de-aprendizaje-continuo-dataset-evolutivo) ⭐
+11. [UI de Revisión y Gestión](#ui-de-revisión-y-gestión) ⭐ **NUEVO**
+12. [SQL Server (opcional)](#sql-server-opcional)
+13. [Troubleshooting](#troubleshooting)
+14. [Roadmap](#roadmap-sprints-4-7)
+15. [Versión](#versión)
 
 ---
 
-## Cambio de arquitectura
+## Objetivo y Enfoque
 
-### Sprint 1 (anterior)
+### Evolución del Proyecto
+
+**Sprint 1-2 (Góndolas de supermercado):**
+- Enfoque inicial en góndolas de retail
+- Conteo por frame con deduplicación
+- Identificación visual pura (CLIP)
+
+**Sprint 3+ (Depósitos y almacenes):**
+- **Pivot a escenario warehouse/depot**
+- **Tracking temporal** para conteo por unidad
+- **Unidades logísticas** (pack/box/pallet) - en desarrollo
+- **Identificación híbrida** (barcode/OCR/visual) - en desarrollo
+- **Consolidación de decisiones** por track (votación temporal)
+
+### Casos de Uso Actuales
+
+1. **Inventario de depósito**: Conteo preciso de productos en almacenes
+2. **Tracking de unidades**: Seguimiento de productos individuales a lo largo del tiempo
+3. **Aprendizaje continuo**: Mejora automática del sistema con cada ejecución
+4. **Revisión asistida**: UI para revisar y corregir identificaciones dudosas
+
+### Casos de Uso Futuros (Sprint 4+)
+
+1. **Conteo por unidades logísticas**: Pack, box, pallet
+2. **Identificación híbrida**: Barcode + OCR + visual
+3. **Planograma de depósito**: Verificación de ubicación correcta
+4. **Detección de faltantes**: Productos ausentes en ubicaciones esperadas
+
+---
+
+## Arquitectura
+
+### Flujo Principal
 
 ```
-Video → Roboflow API (detección + clasificación) → EAN → Reporte
+Video → Frames → Detección (YOLO) → Tracking (SORT-like) → Identificación (CLIP)
+  → Consolidación por Track → Conteo por Unidad → Reporte
 ```
 
-* Cada SKU nuevo requería: subir imágenes → anotar → reentrenar → esperar → probar.
-* **Tiempo por SKU: 3–6 horas.**
-* Dependencia total de API externa.
+### Componentes Clave
 
-### Sprint 2 (actual)
-
-```
-Video → YOLO local (detección genérica) → Crops → CLIP (embeddings)
-     → (packaging) → Búsqueda vectorial → EAN → Reporte
-```
-
-* Agregar un SKU = agregar imágenes + recalcular embeddings.
-* **Tiempo por SKU: 5 minutos.**
-* Sin reentrenamiento por SKU.
-* El detector YOLO se reentrena **solo si** querés mejorar la detección.
+1. **Pipeline Engine** (`src/pipeline/core/engine.py`): Orquesta todo el flujo
+2. **Tracking Runtime** (`src/pipeline/tracking/track_runtime.py`): Maneja tracking por frame
+3. **Track Vote Accumulator** (`src/tracking/track_vote_accumulator.py`): Consolida decisiones por track
+4. **Detection Processor** (`src/pipeline/processing/detection_processor.py`): Procesa detecciones con política de decisión
+5. **Learning Integration** (`src/pipeline/output/learning_integration.py`): Captura crops dudosos para aprendizaje
+6. **UI de Revisión** (`src/ui/app.py`): Interfaz web para revisar y corregir
 
 ---
 
 ## Cómo funciona
 
+### Procesamiento con Tracking (Recomendado)
+
 1. **Extraer frames** del video (`--fps` configurable)
 2. **Detectar instancias de producto** (YOLOv8 local, genérico)
-3. **Recortar crops** (padding dinámico, ROI opcional)
-4. **Clasificar packaging** (CLIP zero-shot) → filtrar candidatos
-5. **Identificar SKU** (CLIP embedding + búsqueda por similitud)
-6. **Guardar review** (unknown/ambiguous) para auto-mejora
-7. **Reporte**: CSV + frames anotados (+ DB opcional)
+3. **Tracking temporal** (SORT-like): asigna IDs persistentes a productos
+4. **Filtrar detecciones** por área, aspecto y bordes
+5. **Identificar SKU** (CLIP embedding + búsqueda por similitud) - **una vez por detección**
+6. **Acumular votos** por track (cada frame vota por un EAN)
+7. **Finalizar tracks** y consolidar decisiones (mayoría + confianza)
+8. **Conteo por unidad**: 1 track finalizado = 1 producto contado
+9. **Guardar crops dudosos** (unknown/ambiguous) para auto-mejora
+10. **Reporte**: CSV por track + CSV por frame + frames anotados
+
+### Procesamiento sin Tracking (Legacy)
+
+1. **Extraer frames** del video
+2. **Detectar instancias de producto**
+3. **Identificar SKU** por frame
+4. **Deduplicación por frame**: máximo conteo observado
+5. **Reporte**: CSV por frame
 
 ---
 
@@ -82,37 +120,86 @@ Video → YOLO local (detección genérica) → Crops → CLIP (embeddings)
 
 ```
 dinamic-carrefour/
-├── run.py
-├── eans.txt
+├── run.py                          # Script principal (legacy)
+├── src/main.py                     # Punto de entrada principal
+├── start_ui.py                     # Iniciar UI de revisión
+├── eans.txt                        # Catálogo de productos
 ├── requirements.txt
 ├── .env (opcional)
 │
 ├── src/
+│   ├── main.py                     # CLI principal
 │   ├── analizar_video.py
 │   ├── protocols.py
+│   │
 │   ├── detector/
-│   │   └── yolo_detector.py          # YOLO retail-ready (sin COCO mapping)
+│   │   └── yolo_detector.py        # YOLO retail-ready
+│   │
 │   ├── sku_identifier/
-│   │   ├── embedder.py               # CLIP embeddings
-│   │   ├── categorizer.py            # packaging zero-shot (CLIP)
-│   │   ├── vector_store.py           # búsqueda vectorial (filtra por categoría)
-│   │   └── identifier.py             # decisión (matched/unknown/ambiguous)
+│   │   ├── embedder.py             # CLIP embeddings
+│   │   ├── categorizer.py          # packaging zero-shot (CLIP)
+│   │   ├── vector_store.py         # búsqueda vectorial
+│   │   └── identifier.py           # decisión (matched/unknown/ambiguous)
+│   │
+│   ├── tracking/
+│   │   ├── tracker_base.py         # Interfaz base
+│   │   ├── sort_like_tracker.py    # Tracker SORT-like
+│   │   ├── track_types.py          # Tipos de datos
+│   │   └── track_vote_accumulator.py # Consolidación de votos
+│   │
 │   ├── pipeline/
-│   │   └── engine.py                 # video → frames → detección → identificación → reporte
-│   └── database/
-│       ├── schema.sql
-│       ├── connection.py
-│       └── repository.py
+│   │   ├── core/
+│   │   │   ├── engine.py           # Pipeline principal
+│   │   │   └── video_reader.py    # Lectura de frames
+│   │   ├── processing/
+│   │   │   ├── detection_processor.py # Procesamiento de detecciones
+│   │   │   ├── crop_processor.py   # Heurísticas de crops
+│   │   │   ├── decision_policy.py  # Política de decisión genérica
+│   │   │   └── bbox_quality.py     # Scorer de calidad de bbox
+│   │   ├── tracking/
+│   │   │   ├── track_setup.py      # Configuración de tracking
+│   │   │   ├── track_runtime.py    # Runtime de tracking
+│   │   │   ├── track_exporter.py   # Exportación de resultados
+│   │   │   └── track_integration.py # Utilidades de integración
+│   │   └── output/
+│   │       ├── report_generator.py # Generación de reportes
+│   │       ├── result_builder.py   # Construcción de resultados
+│   │       └── learning_integration.py # Integración con aprendizaje
+│   │
+│   ├── database/
+│   │   ├── schema.sql
+│   │   ├── connection.py
+│   │   └── repository.py
+│   │
+│   ├── learning/
+│   │   └── manager.py              # Learning Manager
+│   │
+│   └── ui/
+│       ├── app.py                  # FastAPI app
+│       ├── services/
+│       │   ├── report.py           # Servicios de reporte
+│       │   ├── review_store.py    # Almacenamiento de revisión
+│       │   └── db.py              # Servicios de DB
+│       ├── templates/              # Templates HTML
+│       └── static/                 # CSS/JS
 │
 ├── scripts/
 │   ├── buscarimagenes.py
 │   ├── agregar_sku.py
-│   └── init_db.py
+│   ├── init_db.py
+│   ├── revisar_crops.py
+│   └── absorber_crops.py
 │
-├── imagenes/<EAN>/
-├── catalog/embeddings/<EAN>.npy
-├── review/
-└── output/
+├── imagenes/<EAN>/                 # Imágenes de referencia
+├── catalog/embeddings/<EAN>.npy    # Embeddings CLIP
+├── output/<run_id>/                # Resultados de ejecución
+│   ├── reporte_deteccion/
+│   │   ├── inventario_por_track.csv
+│   │   ├── inventario_por_frame.csv
+│   │   └── frame_*.jpg
+│   ├── learning/                   # Crops dudosos
+│   └── track_summary.json
+└── data/                            # Videos (ignorado en git)
 ```
 
 ---
@@ -120,8 +207,8 @@ dinamic-carrefour/
 ## Requisitos previos
 
 * **Python 3.10+**
-* **8 GB RAM** mínimo
-* GPU (CUDA) opcional (recomendado)
+* **8 GB RAM** mínimo (16 GB recomendado)
+* **GPU (CUDA)** opcional pero recomendado
 * **Ultralytics YOLOv8**
 * **OpenAI CLIP** (`openai-clip`)
 
@@ -134,7 +221,7 @@ git clone <URL_DEL_REPO>
 cd dinamic-carrefour
 
 python3 -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # En Windows: venv\Scripts\activate
 
 pip install -r requirements.txt
 ```
@@ -148,33 +235,85 @@ Primera ejecución descarga y cachea:
 
 ## Uso principal — procesar un video
 
+### Con tracking (Recomendado)
+
 ```bash
-python run.py data/IMG_2196.MOV
+python src/main.py data/video.MOV --use-tracks
 ```
 
-Recomendado retail:
+Con parámetros personalizados:
 
 ```bash
-python run.py data/IMG_2196.MOV \
+python src/main.py data/video.MOV \
+  --use-tracks \
+  --track-iou 0.35 \
+  --track-min-hits 3 \
+  --track-max-age 15 \
   --fps 1.0 \
-  --confianza 0.15 \
-  --det-iou 0.60 \
-  --imgsz 960 \
-  --max-det 300
+  --confianza 0.15
 ```
 
-Con ROI (muy útil para ignorar piso/techo/reflejos):
+### Sin tracking (Legacy)
 
 ```bash
-python run.py data/IMG_2196.MOV \
-  --roi 0.05,0.10,0.95,0.98
+python src/main.py data/video.MOV
 ```
 
-Verbose (top-3 candidatos por crop):
+### Parámetros comunes
 
 ```bash
-python run.py data/IMG_2196.MOV --verbose
+python src/main.py data/video.MOV \
+  --fps 1.0 \                    # FPS de extracción
+  --confianza 0.15 \             # Confianza mínima YOLO
+  --det-iou 0.60 \               # IoU para NMS
+  --roi 0.05,0.10,0.95,0.98 \   # ROI normalizado (opcional)
+  --verbose                      # Output detallado
 ```
+
+---
+
+## Tracking temporal (Sprint 3.1) ⭐ **NUEVO**
+
+### ¿Qué es?
+
+El sistema ahora implementa **tracking temporal** que asigna IDs persistentes a productos a lo largo de frames, permitiendo:
+
+1. **Conteo por unidad**: 1 track = 1 producto (elimina duplicados temporales)
+2. **Consolidación de decisiones**: Votación por mayoría a lo largo del tiempo
+3. **Mejor precisión**: Decisiones más estables que identificación frame-by-frame
+
+### Cómo funciona
+
+1. **Asignación de IDs**: SORT-like tracker asigna IDs persistentes basado en IoU
+2. **Acumulación de votos**: Cada frame vota por un EAN para cada track
+3. **Finalización de tracks**: Cuando un track termina (max_age o video termina)
+4. **Decisión final**: Mayoría de votos + reglas de confianza (DecisionProfile)
+
+### Decision Profiles
+
+El sistema soporta diferentes perfiles de decisión según el escenario:
+
+- **`WAREHOUSE_BALANCED`** (default): Balance entre precisión y recall para depósitos
+- **`WAREHOUSE_LENIENT`**: Más permisivo, acepta tracks cortos
+- **`SHELF_STRICT`**: Más estricto, requiere más frames y mayor confianza
+
+### Parámetros de tracking
+
+```bash
+--use-tracks              # Activar tracking
+--track-iou 0.35         # IoU mínimo para matching (default: 0.4)
+--track-min-hits 3       # Mínimo de hits para track válido (default: 3)
+--track-max-age 15       # Máximo de frames sin detección (default: 15)
+```
+
+### Output con tracking
+
+Cuando se activa tracking, se generan:
+
+- `inventario_por_track.csv`: Conteo por unidad (1 track = 1 producto)
+- `inventario_por_frame.csv`: Conteo por frame (comparación)
+- `tracks_debug.csv`: Debug de tracking (frame, det_idx, track_id, IoU)
+- `track_summary.json`: Resumen de tracks finalizados
 
 ---
 
@@ -214,79 +353,11 @@ python scripts/agregar_sku.py \
 
 ---
 
-## Categorización por packaging
+## Sistema de Aprendizaje Continuo (Dataset Evolutivo)
 
-El sistema primero predice packaging (CLIP zero-shot).
-Luego busca el SKU **solo** dentro de la misma categoría, con fallback automático:
+> **📚 Documentación completa**: Ver [LEARNING_SYSTEM.md](LEARNING_SYSTEM.md) (si existe)
 
-* Si detecta `lata` pero no hay latas en el catálogo → busca en todo el catálogo.
-
-Desactivar categorización:
-
-```bash
-python run.py data/IMG_2196.MOV --sin-categorias
-```
-
----
-
-## Detector YOLO retail-ready (Capa A)
-
-**Ubicación:** `src/detector/yolo_detector.py`
-
-### Cambio clave (v5.4)
-
-✅ **Ya NO se usa COCO mapping** ni `categoria_coco_mapeo`.
-✅ YOLO corre **sin filtrar por clases** y devuelve detecciones normalizadas como `clase="product"`.
-
-**MVP (hoy):**
-
-* Podés usar `yolov8n.pt` como “detector genérico”
-* Ajustás `--confianza`, `--imgsz`, `--roi`
-
-**Evolución recomendada:**
-
-* entrenar un modelo YOLO con **1 clase**: `product`
-* el pipeline no cambia: solo apuntás `--modelo-yolo runs/.../best.pt`
-
-### Heurísticas baratas (retail real)
-
-* filtro por **área relativa**
-* filtro por **aspect ratio**
-* **ROI** opcional
-* **padding dinámico** para mejorar crops de CLIP
-
----
-
-## Identificador SKU (Capa B)
-
-* **CLIP (ViT-B/32)** genera embedding del crop (512D).
-* **VectorStore** busca por similitud coseno.
-* **Max-Similarity**: compara contra **todas** las imágenes del SKU (no solo centroide).
-
-Decisión:
-
-* `top1 ≥ sku_threshold` → MATCHED
-* `top1 < unknown_threshold` → UNKNOWN (va a review)
-* `top1 - top2 < margen_ambiguedad` → AMBIGUOUS (va a review)
-
----
-
-## Pipeline + deduplicación por frame
-
-**Deduplicación (v5.1+)**
-En vez de sumar detecciones por todos los frames, el conteo final por SKU es:
-
-> **máximo conteo observado en un frame**
-
-Esto representa la “mejor vista” de la góndola y evita inflar conteos.
-
----
-
-## Sistema de Aprendizaje Continuo (Dataset Evolutivo) — v2.1
-
-> **📚 Documentación completa**: Ver [LEARNING_SYSTEM.md](LEARNING_SYSTEM.md)
-
-El sistema ahora implementa un **loop de mejora automática** que permite que el sistema mejore con cada ejecución, sin necesidad de reentrenamientos.
+El sistema implementa un **loop de mejora automática** que permite que el sistema mejore con cada ejecución, sin necesidad de reentrenamientos.
 
 ### ¿Cómo funciona?
 
@@ -296,9 +367,7 @@ El sistema ahora implementa un **loop de mejora automática** que permite que el
    - Información lista para revisión humana
 
 2. **Revisión rápida** (5-10 minutos):
-   ```bash
-   python scripts/revisar_crops.py output/VIDEO_TIMESTAMP/learning
-   ```
+   - Usar la UI web (recomendado) o CLI
    - Asignar EAN correcto a cada crop
    - Guardar cambios en metadata
 
@@ -333,48 +402,56 @@ output/<video_timestamp>/
 ✅ **Rápido**: Revisión típica: 5-10 minutos  
 ✅ **Medible**: Métricas de evolución (UNKNOWN%, similitud promedio, etc.)
 
-### Uso rápido
-
-```bash
-# 1. Ejecutar pipeline (guarda crops automáticamente)
-python run.py data/video.MOV
-
-# 2. Revisar crops dudosos
-python scripts/revisar_crops.py output/VIDEO_TIMESTAMP/learning
-
-# 3. Absorber crops al catálogo
-python scripts/absorber_crops.py output/VIDEO_TIMESTAMP/learning
-```
-
-**Resultado**: El sistema mejora progresivamente sin intervención técnica.
-
 ---
 
-## Sistema de auto-mejora (review) — Legacy
+## UI de Revisión y Gestión ⭐ **NUEVO**
 
-Los crops con:
+### Iniciar la UI
 
-* baja similitud → `UNKNOWN`
-* top1≈top2 → `AMBIGUOUS`
+```bash
+python start_ui.py
+```
 
-se guardan en `review/` con `_meta.json` (top-k + scores).
-Luego:
+O directamente:
 
-1. los etiquetás
-2. los movés a `imagenes/<EAN>/`
-3. recalculás embeddings
+```bash
+uvicorn src.ui.app:app --reload --port 8000
+```
+
+Luego abrir: `http://localhost:8000`
+
+### Funcionalidades
+
+1. **Home**: Lista de videos y runs existentes
+2. **Reporte del run**: 
+   - Tabla del CSV de inventario
+   - Descarga de CSV
+   - Grid de frames anotados
+   - Botón para revisar crops
+3. **Revisión**:
+   - Ver cada crop dudoso
+   - Ver candidatos (top matches)
+   - Asignar EAN o saltar
+   - Autocomplete desde DB
+   - Progreso de revisión
+   - Botón para absorber cambios
+4. **Absorción**: Ejecuta el script de absorción y muestra logs
+
+### Workflow recomendado
+
+1. Ejecutar pipeline: `python src/main.py data/video.MOV --use-tracks`
+2. Abrir UI: `python start_ui.py`
+3. Ir al run recién creado
+4. Click en "Revisar" si hay crops dudosos
+5. Revisar y asignar EANs
+6. Click en "Absorber" cuando termines
+7. El sistema mejora automáticamente
 
 ---
 
 ## SQL Server (opcional)
 
-Se activa con:
-
-```bash
-python run.py data/IMG_2196.MOV --db
-```
-
-Setup:
+Se activa automáticamente si está disponible. Para configurar:
 
 ```bash
 python scripts/init_db.py --test
@@ -382,172 +459,6 @@ python scripts/init_db.py --crear
 python scripts/init_db.py --sync
 python scripts/init_db.py --status
 ```
-
----
-
-# Entrenar el detector YOLO (1 clase `product`)
-
-## Objetivo del entrenamiento
-
-Pasar de “YOLO genérico (COCO)” a un detector específico de góndolas:
-
-✅ 1 clase: `product`
-✅ mejor recall en góndola
-✅ menos falsos positivos (manos/reflejos/carteles)
-
----
-
-## Paso 1 — Crear dataset
-
-### Recomendado (rápido): Roboflow / CVAT / Label Studio
-
-* Tomá frames reales del video (o fotos de góndola)
-* Anotá **cada producto visible** con bounding box
-* Exportá formato **YOLOv8** (o YOLO)
-
-Estructura esperada:
-
-```
-datasets/shelf-products/
-├── data.yaml
-├── train/
-│   ├── images/
-│   └── labels/
-├── valid/
-│   ├── images/
-│   └── labels/
-└── test/
-    ├── images/
-    └── labels/
-```
-
-`data.yaml`:
-
-```yaml
-path: datasets/shelf-products
-train: train/images
-val: valid/images
-test: test/images
-
-names:
-  0: product
-```
-
----
-
-## Paso 2 — Entrenar con Ultralytics
-
-### Entrenamiento base (recomendado)
-
-```bash
-yolo detect train \
-  model=yolov8n.pt \
-  data=datasets/shelf-products/data.yaml \
-  imgsz=960 \
-  epochs=80 \
-  batch=8 \
-  device=auto
-```
-
-### Tips de entrenamiento (retail real)
-
-* `imgsz=960` o `1280` mejora detección de productos chicos
-* si tenés GPU: subí batch
-* si tenés pocos datos: empezá con `yolov8n.pt`, luego `yolov8s.pt`
-
----
-
-## Paso 3 — Validar resultados
-
-El entrenamiento genera:
-
-```
-runs/detect/train/
-├── weights/best.pt
-└── results.png
-```
-
-Probá inferencia rápida:
-
-```bash
-yolo detect predict \
-  model=runs/detect/train/weights/best.pt \
-  source=data/frames_test/ \
-  imgsz=960 \
-  conf=0.15
-```
-
----
-
-## Paso 4 — Usar el modelo entrenado en el pipeline
-
-```bash
-python run.py data/IMG_2196.MOV \
-  --modelo-yolo runs/detect/train/weights/best.pt \
-  --confianza 0.15 \
-  --det-iou 0.60 \
-  --imgsz 960
-```
-
-✅ El resto del sistema no cambia.
-
----
-
-# Migración a v5.4: qué cambió y qué hacer
-
-## Cambios principales
-
-1. **Se elimina COCO mapping**
-
-   * ya no existe `categoria_coco_mapeo`
-   * el detector NO carga clases desde DB
-   * YOLO detecta “todo lo que parezca producto” y normaliza `clase="product"`
-
-2. **El detector ahora tiene parámetros retail**
-
-   * `--det-iou`, `--imgsz`, `--max-det`, `--roi`, `--device`, `--half`
-
-3. **El pipeline prioriza procesar y descartar crops**
-
-   * evita acumular crops en RAM
-   * (si `--guardar-crops`) guarda en disco para debug/review
-
-## Pasos para actualizar tu repo
-
-1. Reemplazar `src/detector/yolo_detector.py` por la versión retail-ready (v5.4)
-2. Asegurarte que **no exista ninguna referencia** a:
-
-   * `categoria_coco_mapeo`
-   * `obtener_mapeo_coco()`
-   * `cargar_clases_desde_bd()`
-3. Actualizar `run.py` para incluir flags retail (si no los tenías):
-
-   * `--det-iou`, `--imgsz`, `--max-det`, `--roi`, `--device`, `--half`
-4. Si usás DB:
-
-   * mantener catálogo/categorías/ejecuciones/detecciones
-   * **no** crear tabla de mapping COCO (ya no aplica)
-
-## “Nuevos pasos a hacer” (operativo)
-
-1. **Elegir ROI estándar por tipo de video** (reduce falsos positivos muchísimo)
-2. **Ajustar defaults retail**
-
-   * `conf=0.15`, `imgsz=960`, `iou=0.60`
-3. **Cargar 50–200 frames y anotar** para dataset `product` (Sprint 2.4)
-4. Entrenar YOLO 1-clase y usar `best.pt`
-5. Implementar revisión rápida de `review/` (script simple) para absorber crops reales al catálogo
-6. (Opcional) empezar a preparar Sprint 3 (tracking real para conteo por unidad)
-
----
-
-## Roadmap (Sprints 3–7)
-
-* **Sprint 3**: Tracking (ByteTrack/SORT) → conteo real por unidad (IDs persistentes)
-* **Sprint 4**: Conteo por estantes/zonas + sampling inteligente
-* **Sprint 5**: Keyframes + consolidación espacial (IoU entre keyframes)
-* **Sprint 6**: Planograma + faltantes + productos fuera de lugar
-* **Sprint 7**: Escala (batch workers + drones + sucursal)
 
 ---
 
@@ -572,310 +483,93 @@ python run.py data/IMG_2196.MOV \
 
 2. **Mismatch de modelo CLIP**:
    ```bash
-   # Asegurarse de usar el mismo modelo en todo
    export CLIP_MODEL="ViT-B/16"  # o el que uses
    python scripts/agregar_sku.py --todos --forzar
-   python run.py data/video.MOV
+   python src/main.py data/video.MOV
    ```
 
-3. **Thresholds demasiado altos** (ya ajustados en v5.6):
+3. **Thresholds demasiado altos**:
    - Defaults actuales: `match=0.28`, `unknown=0.20`
-   - Si aún hay problemas, ajustar según verbose output
+   - Ajustar según verbose output
 
-4. **Categoría sin candidatos**:
-   - El sistema tiene fallback automático
-   - Verificar con `--verbose` si la categoría detectada tiene candidatos
+### Tracking no funciona correctamente
 
-**Diagnóstico**:
-```bash
-python run.py data/video.MOV --verbose
-# Buscar en output: top5_sims, candidatos_categoria, candidatos_totales
-```
+1. **Tracks muy cortos**: Aumentar `--track-min-hits`
+2. **Tracks no terminan**: Reducir `--track-max-age`
+3. **Muchos tracks efímeros**: Aumentar `--confianza` o ajustar filtros de área
 
 ### Productos identificados incorrectamente
 
-1. **Verificar similitudes en verbose**:
-   ```bash
-   python run.py data/video.MOV --verbose
-   # Si top1_sim está cerca de top2_sim → ambiguous (esperado)
-   # Si top1_sim es muy bajo (<0.25) → considerar agregar más imágenes al catálogo
-   ```
+1. **Usar tracking**: Mejora la precisión con consolidación temporal
+2. **Revisar crops dudosos**: Usar UI para identificar problemas
+3. **Mejorar catálogo**: Agregar más imágenes de referencia
 
-2. **Ajustar thresholds**:
-   ```bash
-   # Si muchos matched con similitudes bajas
-   python run.py data/video.MOV --sku-threshold 0.30
-   
-   # Si muchos unknown con similitudes razonables
-   python run.py data/video.MOV --unknown-threshold 0.18
-   ```
+---
 
-3. **Mejorar catálogo**:
-   - Usar sistema de aprendizaje continuo
-   - Revisar crops dudosos y absorber al catálogo
-   - Agregar más imágenes de referencia por SKU
+## Roadmap (Sprints 4-7)
+
+* **Sprint 4**: 
+  - Unidades logísticas (pack/box/pallet)
+  - Identificación híbrida (barcode/OCR/visual)
+  - Conteo por unidades logísticas
+* **Sprint 5**: Planograma de depósito + detección de faltantes
+* **Sprint 6**: Escala (batch workers + múltiples cámaras)
+* **Sprint 7**: Optimizaciones y mejoras de performance
 
 ---
 
 ## Versión
 
-* **Versión**: **5.6** (Política de Decisión Genérica)
-* **Última actualización**: **20 Febrero 2026**
+* **Versión**: **6.0** (Tracking Temporal + UI + Warehouse Focus)
+* **Última actualización**: **Febrero 2026**
 * **Inferencia externa**: ninguna
-* **Catálogo actual**: 9 SKUs
+* **Catálogo actual**: 9+ SKUs
 * **Packaging**: botella, lata, bolsa, caja, paquete, tubo, frasco
 
-### Changelog v5.5 (Sistema de Aprendizaje Continuo)
+### Changelog v6.0 (Tracking Temporal + UI + Warehouse Focus)
 
-* **Learning Manager**: Captura automática de crops dudosos por ejecución
-* **Dataset evolutivo**: Cada ejecución genera metadata estructurada en `learning/`
-* **Script de revisión**: `scripts/revisar_crops.py` para revisión rápida CLI
-* **Script de absorción**: `scripts/absorber_crops.py` para absorber crops al catálogo
-* **Loop de mejora**: Sistema mejora automáticamente sin reentrenamientos
-* **Metadata completa**: JSONL con toda la información de cada decisión (detection, packaging, SKU identification)
-* **Integración automática**: Learning Manager se activa automáticamente en el pipeline
+* **Tracking temporal**: SORT-like tracker con IDs persistentes
+* **Consolidación por track**: TrackVoteAccumulator con DecisionProfiles
+* **UI de revisión**: Interfaz web completa para revisar y gestionar crops
+* **Pivot a warehouse/depot**: Enfoque en depósitos y almacenes
+* **Modularización**: Pipeline dividido en módulos (core/processing/tracking/output)
+* **Código en inglés**: Funciones y variables en inglés, comentarios en español
+* **Mejoras de precisión**: Decisiones más estables con tracking
 
 ### Changelog v5.6 (Política de Decisión Genérica)
 
 * **1 bbox = 1 decisión final**: Eliminado doble conteo por split
-* **Decision Policy**: Módulo genérico y escalable para decisiones de identificación
-* **BBox Quality Scorer**: Métricas genéricas de calidad (reemplaza heurísticas hardcodeadas)
-* **Split como fallback controlado**: Split solo si mejora significativamente
-* **Packaging calculado una vez**: Reutilización de categoría en splits (evita recálculo)
-* **Thresholds ajustados para CLIP**: Valores realistas (0.28 match, 0.20 unknown)
-* **Configuración por perfil**: `catalog_only()`, `shelf_video()`, `low_light()`
-* **Pipeline genérico**: Sin código hardcodeado por producto, escalable a cualquier rubro
+* **Decision Policy**: Módulo genérico y escalable
+* **BBox Quality Scorer**: Métricas genéricas de calidad
+* **Split como fallback controlado**: Solo si mejora significativamente
+* **Packaging calculado una vez**: Reutilización de categoría en splits
 
-### Changelog v5.4
+### Changelog v5.5 (Sistema de Aprendizaje Continuo)
 
-* **YOLO retail-ready**: detección genérica sin COCO mapping
-* **ROI + heurísticas**: filtros baratos (área/aspect) + padding dinámico
-* **CLI extendida**: `--det-iou`, `--imgsz`, `--max-det`, `--roi`, `--device`, `--half`
-* **Preparado para YOLO 1-clase**: mismo pipeline, solo cambia el modelo
+* **Learning Manager**: Captura automática de crops dudosos
+* **Dataset evolutivo**: Metadata estructurada por ejecución
+* **Scripts de revisión y absorción**: Workflow completo de mejora
 
 ---
 
-## Problema de Identificación Actual
+## Contribuir
 
-### Descripción del Problema
+Este es un proyecto en desarrollo activo. Para contribuir:
 
-El sistema aún presenta dificultades para identificar correctamente algunos productos, resultando en:
-- Productos identificados como `UNKNOWN` cuando deberían ser reconocidos
-- Falsos positivos (productos incorrectos identificados)
-- Baja confianza en identificaciones correctas
-
-### Causas Identificadas
-
-#### 1. Thresholds de CLIP
-
-**Problema**: Los thresholds originales (0.75 match, 0.40 unknown) eran demasiado altos para similitudes de CLIP en condiciones reales de góndola.
-
-**Solución implementada**: Thresholds ajustados a valores más realistas:
-- `match_threshold = 0.28` (antes 0.75)
-- `unknown_threshold = 0.20` (antes 0.40)
-- `ambiguity_margin = 0.02` (antes 0.005)
-
-**Rango típico de similitudes CLIP**:
-- Similitudes buenas: ~0.22-0.35 (depende de dataset, iluminación, distancia)
-- 0.75 es casi imposible de alcanzar en góndola real
-
-#### 2. Mismatch de Modelo CLIP
-
-**Problema**: Si se generaron embeddings con un modelo CLIP y se ejecuta el pipeline con otro, las similitudes bajan drásticamente.
-
-**Solución**: 
-- Validación de dimensiones al inicializar `SKUIdentifier`
-- Asegurar que `CLIP_MODEL` sea consistente en todo el pipeline
-
-**Cómo verificar**:
-```bash
-# Verificar modelo usado
-export CLIP_MODEL="ViT-B/16"  # o el que uses
-python scripts/agregar_sku.py --todos --forzar
-python run.py data/video.MOV
-```
-
-#### 3. Calidad de Crops
-
-**Problema**: Crops que incluyen:
-- Múltiples productos (bboxes anchos)
-- Carteles promocionales
-- Reflejos y oclusiones
-- Background excesivo
-
-**Solución implementada**:
-- **BBox Quality Scorer**: Métrica genérica que detecta bboxes "mezclados"
-- **Split condicional**: Solo si el resultado full es dudoso Y el bbox tiene calidad baja
-- **Inner crop**: Recorte central (75%) para reducir background
-
-#### 4. Catálogo Insuficiente
-
-**Problema**: 
-- Pocas imágenes de referencia por SKU
-- Imágenes de baja calidad
-- Imágenes no representativas (ángulos, iluminación diferentes)
-
-**Solución**: Sistema de aprendizaje continuo
-- Cada ejecución genera crops dudosos
-- Revisión humana y absorción al catálogo
-- El sistema mejora progresivamente
-
-#### 5. Filtrado por Categoría
-
-**Problema**: Si la categoría detectada no tiene candidatos, el sistema puede fallar.
-
-**Solución implementada**:
-- Fallback automático: si categoría filtrada da 0 candidatos → buscar en todo el catálogo
-- Logging verbose para diagnosticar filtrado
-
-### Diagnóstico
-
-Para diagnosticar problemas de identificación, usar `--verbose`:
-
-```bash
-python run.py data/video.MOV --verbose
-```
-
-El output muestra:
-- `packaging_pred`: Categoría detectada
-- `candidatos_categoria`: Candidatos en la categoría filtrada
-- `candidatos_totales`: Total de SKUs en catálogo
-- `top5_sims`: Similitudes de los top 5 candidatos
-- `thresholds`: Thresholds usados
-
-**Ejemplo de output**:
-```
-   🔍 frame_00005_crop_000: packaging=bolsa (bolsa), candidatos_categoria=3, candidatos_totales=18
-   ✅ frame_00005_crop_000 [bolsa]: matched → 7793890258288 (sim=0.3124 Δ=0.0456, candidatos=3/18 top5_sims=[0.3124, 0.2668, 0.2345, 0.2012, 0.1890])
-      thresholds: match>=0.280, unknown<0.200, margin=0.020
-```
-
-### Ajuste de Thresholds
-
-Si después de los cambios aún hay problemas:
-
-1. **Muchos `matched` con similitudes muy bajas (<0.25)**:
-   ```bash
-   python run.py data/video.MOV --sku-threshold 0.30
-   ```
-
-2. **Muchos `unknown` con similitudes razonables (0.22-0.28)**:
-   ```bash
-   python run.py data/video.MOV --unknown-threshold 0.18
-   ```
-
-3. **Muchos `ambiguous` cuando deberían ser `matched`**:
-   ```bash
-   python run.py data/video.MOV --margen-ambiguedad 0.03
-   ```
-
-### Mejoras Futuras
-
-1. **Temporal Aggregator**: Tracking entre frames para estabilidad
-   - Votación por mayoría en ventana de N frames
-   - Confirmación de EAN si aparece estable X frames
-
-2. **Re-ranking**: Post-procesamiento de candidatos
-   - Considerar metadata adicional (posición, contexto)
-   - Ajuste dinámico de thresholds por SKU
-
-3. **Hard Negative Mining**: Identificar casos problemáticos específicos
-   - Detectar productos que consistentemente se confunden
-   - Agregar imágenes de referencia específicas
-
-4. **Calibración automática**: Ajuste de thresholds basado en métricas
-   - Validación en set de referencia
-   - Optimización de thresholds por métricas (precision/recall)
+1. Fork el repositorio
+2. Crea una rama para tu feature (`git checkout -b feature/nueva-funcionalidad`)
+3. Commit tus cambios (`git commit -am 'Agregar nueva funcionalidad'`)
+4. Push a la rama (`git push origin feature/nueva-funcionalidad`)
+5. Abre un Pull Request
 
 ---
 
-## Política de Decisión Genérica (v5.6)
+## Licencia
 
-### Arquitectura
-
-El sistema ahora implementa una **política de decisión genérica y escalable** que separa la lógica de decisión de la implementación específica.
-
-#### Módulos Nuevos
-
-1. **`src/pipeline/decision_policy.py`**: Política de decisión
-   - `DecisionPolicyConfig`: Configuración de thresholds y reglas
-   - `DecisionPolicy`: Lógica de decisión final
-   - Perfiles configurables: `catalog_only()`, `shelf_video()`, `low_light()`
-
-2. **`src/pipeline/bbox_quality.py`**: Scorer de calidad de bbox
-   - Métricas genéricas (aspect ratio, área, confianza YOLO, distancia a bordes)
-   - Score combinado ponderado (configurable)
-
-### Principios de Diseño
-
-1. **1 bbox = 1 decisión final**
-   - Eliminado doble conteo por split
-   - Split solo si mejora significativamente
-
-2. **Split como fallback controlado**
-   - Solo si resultado full es dudoso
-   - Solo si bbox tiene calidad baja (probablemente mezclado)
-   - Solo si split mejora significativamente (`split_delta_min`)
-
-3. **Packaging calculado una vez**
-   - Se calcula en el crop completo
-   - Se reutiliza en splits (evita recálculo)
-
-4. **Sin código hardcodeado**
-   - Métricas genéricas (no específicas de producto)
-   - Configuración por perfil (no por producto)
-   - Escalable a cualquier rubro
-
-### Flujo de Decisión
-
-Para cada bbox:
-
-1. Calcular embedding y packaging (una vez)
-2. Identificar crop completo
-3. Calcular calidad del bbox (genérico)
-4. Si es dudoso Y bbox mezclado → intentar split
-5. Si split mejora → usar split; si no → usar full
-6. Retornar 1 resultado final
-7. Contar 1 EAN (no doble conteo)
-
-### Configuración
-
-Los thresholds y reglas se configuran en `DecisionPolicyConfig`:
-
-```python
-from src.pipeline.decision_policy import DecisionPolicy, DecisionPolicyConfig
-
-# Perfil por defecto (shelf_video)
-policy = DecisionPolicy()
-
-# O usar perfil específico
-config = DecisionPolicyConfig.shelf_video()
-policy = DecisionPolicy(config)
-
-# O personalizar
-config = DecisionPolicyConfig(
-    match_threshold=0.30,
-    unknown_threshold=0.22,
-    ambiguity_margin=0.02,
-    split_delta_min=0.05,
-    bbox_quality_threshold=0.6,
-)
-policy = DecisionPolicy(config)
-```
-
-### Escalabilidad
-
-El sistema es **genérico y escalable**:
-- Cambiar de rubro solo requiere ajustar thresholds en `DecisionPolicyConfig`
-- No hay lógica específica por producto
-- Métricas genéricas aplicables a cualquier tipo de producto
+[Especificar licencia si aplica]
 
 ---
 
-## Versión
+## Contacto
 
-* **Versión**: **5.6** (Política de Decisión Genérica)
-* **Última actualización**: **20 Febrero 2026**
-* **Inferencia externa**: ninguna
-* **Catálogo actual**: 9 SKUs
-* **Packaging**: botella, lata, bolsa, caja, paquete, tubo, frasco
+[Información de contacto si aplica]
